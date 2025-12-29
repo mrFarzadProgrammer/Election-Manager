@@ -24,14 +24,14 @@ export default function QuotesCarousel({ variant = 'fullscreen' }: QuotesCarouse
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrent((prev) => (prev + 1) % QUOTES.length);
-    }, 5000); 
+    }, 5000);
     return () => clearInterval(timer);
   }, []);
 
   const isWidget = variant === 'widget';
 
   return (
-    <div className={`relative w-full h-full flex flex-col justify-center items-center text-white overflow-hidden bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 ${isWidget ? 'p-6' : 'p-12'}`}>
+    <div className={`relative w-full h-full flex flex-col justify-center items-center text-white overflow-hidden bg-gradient-to-br from-blue-600 to-blue-800 ${isWidget ? 'p-6' : 'p-12'}`}>
       {/* Background decoration */}
       <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
       <div className="absolute bottom-0 left-0 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2"></div>
@@ -46,25 +46,24 @@ export default function QuotesCarousel({ variant = 'fullscreen' }: QuotesCarouse
           «{QUOTES[current].text}»
         </p>
         <div className="flex flex-col items-center gap-1 mt-auto">
-            <div className={`bg-yellow-400 rounded-full mb-1 ${isWidget ? 'w-8 h-0.5' : 'w-16 h-1'}`}></div>
-            <h3 className={`${isWidget ? 'text-sm' : 'text-xl'} font-bold text-yellow-100`}>{QUOTES[current].author}</h3>
-            {!isWidget && <span className="text-sm text-blue-200">{QUOTES[current].role}</span>}
+          <div className={`bg-yellow-400 rounded-full mb-1 ${isWidget ? 'w-8 h-0.5' : 'w-16 h-1'}`}></div>
+          <h3 className={`${isWidget ? 'text-sm' : 'text-xl'} font-bold text-yellow-100`}>{QUOTES[current].author}</h3>
+          {!isWidget && <span className="text-sm text-blue-200">{QUOTES[current].role}</span>}
         </div>
       </div>
 
       {/* Indicators */}
       {!isWidget && (
-          <div className="absolute bottom-12 flex gap-2">
-            {QUOTES.map((_, idx) => (
-              <button
-                key={idx}
-                onClick={() => setCurrent(idx)}
-                className={`transition-all duration-300 rounded-full ${
-                  idx === current ? 'w-8 h-2 bg-yellow-400' : 'w-2 h-2 bg-white/30 hover:bg-white/50'
+        <div className="absolute bottom-12 flex gap-2">
+          {QUOTES.map((_, idx) => (
+            <button
+              key={idx}
+              onClick={() => setCurrent(idx)}
+              className={`transition-all duration-300 rounded-full ${idx === current ? 'w-8 h-2 bg-yellow-400' : 'w-2 h-2 bg-white/30 hover:bg-white/50'
                 }`}
-              />
-            ))}
-          </div>
+            />
+          ))}
+        </div>
       )}
     </div>
   );
