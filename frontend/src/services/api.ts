@@ -304,14 +304,14 @@ export const api = {
         return request<Announcement[]>("/api/announcements");
     },
 
-    createAnnouncement: async (title: string, message: string, imageUrl: string | undefined, token: string): Promise<Announcement> => {
+    createAnnouncement: async (title: string, message: string, mediaUrl: string | undefined, mediaType: string | undefined, token: string): Promise<Announcement> => {
         return request<Announcement>("/api/announcements", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${token}`,
             },
-            body: JSON.stringify({ title, content: message, image_url: imageUrl }),
+            body: JSON.stringify({ title, content: message, media_url: mediaUrl, media_type: mediaType }),
         });
     },
 };

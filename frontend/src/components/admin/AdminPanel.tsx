@@ -146,15 +146,37 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
         if (!token) return;
         setIsUploading(true);
         try {
-            let imageUrl = undefined;
+            let mediaUrl = undefined;
+            let mediaType = undefined;
+            
             if (file) {
-                const formData = new FormData(); formData.append('file', file);
-                const res = await fetch('http://localhost:8000/api/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData });
-                const data = await res.json(); imageUrl = data.url;
+                const formData = new FormData(); 
+                formData.append('file', file);
+                const res = await fetch('http://localhost:8000/api/upload', { 
+                    method: 'POST', 
+                    headers: { 'Authorization': `Bearer ${token}` }, 
+                    body: formData 
+                });
+                
+                if (res.ok) {
+                    const data = await res.json(); 
+                    mediaUrl = data.url;
+                    
+                    if (file.type.startsWith('image/')) mediaType = 'IMAGE';
+                    else if (file.type.startsWith('video/')) mediaType = 'VIDEO';
+                    else if (file.type.startsWith('audio/')) mediaType = 'VOICE';
+                    else mediaType = 'FILE';
+                }
             }
-            const newAnn = await api.createAnnouncement(title, message, imageUrl, token);
+            
+            const newAnn = await api.createAnnouncement(title, message, mediaUrl, mediaType, token);
             setAnnouncements(prev => [newAnn, ...prev]);
-        } finally { setIsUploading(false); }
+        } catch (error) {
+            console.error("Failed to send announcement:", error);
+            alert("خطا در ارسال اطلاعیه");
+        } finally { 
+            setIsUploading(false); 
+        }
     };
 
     const navItems = [

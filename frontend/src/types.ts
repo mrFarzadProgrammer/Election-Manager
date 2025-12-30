@@ -63,7 +63,8 @@ export interface TicketMessage {
 export interface Announcement {
     id: string;
     title: string;
-    message: string;
-    date: string;
-    imageUrl?: string;
+    content: string;
+    created_at: string;
+    media_url?: string;
+    media_type?: 'IMAGE' | 'VIDEO' | 'VOICE' | 'FILE';
 }
