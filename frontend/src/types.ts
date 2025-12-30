@@ -47,6 +47,7 @@ export interface Ticket {
     status: 'OPEN' | 'CLOSED' | 'ANSWERED';
     lastUpdate: number;
     user_id: string;
+    userName?: string;
     messages: TicketMessage[];
 }
 

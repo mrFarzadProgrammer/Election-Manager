@@ -72,6 +72,26 @@ const mapCandidate = (c: any): Candidate => ({
     created_at_jalali: c.created_at_jalali || c.createdAtJalali,
 });
 
+const mapPlan = (p: any): Plan => ({
+    ...p,
+    id: String(p.id),
+    price: String(p.price),
+    features: p.features || [],
+    is_visible: p.is_visible ?? false
+});
+
+const mapTicket = (t: any): Ticket => ({
+    ...t,
+    id: String(t.id),
+    user_id: String(t.user_id),
+    userName: t.userName || t.user_name || t.username,
+    messages: (t.messages || []).map((m: any) => ({
+        ...m,
+        id: String(m.id),
+        senderId: String(m.senderId || m.sender_id || 'unknown'),
+    }))
+});
+
 export interface AuthResponse {
     access_token: string;
     refresh_token: string;
@@ -102,12 +122,13 @@ export const api = {
     },
 
     getMe: async (token: string): Promise<User> => {
-        return request<User>("/api/auth/me", {
+        const user = await request<any>("/api/auth/me", {
             method: "GET",
             headers: {
                 Authorization: `Bearer ${token}`,
             },
         });
+        return { ...user, id: String(user.id) };
     },
 
     // ========== Candidates ==========
@@ -193,11 +214,18 @@ export const api = {
 
     // ========== Plans ==========
     getPlans: async (): Promise<Plan[]> => {
-        return request<Plan[]>("/api/plans");
+        try {
+            const data = await request<any[]>("/api/plans");
+            if (!Array.isArray(data)) return [];
+            return data.map(mapPlan);
+        } catch (error) {
+            console.error("Error fetching plans:", error);
+            return [];
+        }
     },
 
     createPlan: async (plan: Partial<Plan>, token: string): Promise<Plan> => {
-        return request<Plan>("/api/plans", {
+        const data = await request<any>("/api/plans", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -205,6 +233,19 @@ export const api = {
             },
             body: JSON.stringify(plan),
         });
+        return mapPlan(data);
+    },
+
+    updatePlan: async (id: string, plan: Partial<Plan>, token: string): Promise<Plan> => {
+        const data = await request<any>(`/api/plans/${id}`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(plan),
+        });
+        return mapPlan(data);
     },
 
     deletePlan: async (id: string, token: string): Promise<void> => {
@@ -218,11 +259,18 @@ export const api = {
 
     // ========== Tickets ==========
     getTickets: async (): Promise<Ticket[]> => {
-        return request<Ticket[]>("/api/tickets");
+        try {
+            const data = await request<any[]>("/api/tickets");
+            if (!Array.isArray(data)) return [];
+            return data.map(mapTicket);
+        } catch (error) {
+            console.error("Error fetching tickets:", error);
+            return [];
+        }
     },
 
     createTicket: async (subject: string, message: string, token: string): Promise<Ticket> => {
-        return request<Ticket>("/api/tickets", {
+        const data = await request<any>("/api/tickets", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -230,6 +278,7 @@ export const api = {
             },
             body: JSON.stringify({ subject, message }),
         });
+        return mapTicket(data);
     },
 
     addTicketMessage: async (

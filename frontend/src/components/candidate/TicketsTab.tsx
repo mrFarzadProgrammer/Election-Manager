@@ -62,7 +62,7 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onCreateTicket, onRepl
                 ) : activeTicket ? (
                     <>
                         <div className='flex-1 overflow-y-auto p-4 space-y-4'>
-                            {activeTicket.messages.map((msg, idx) => (
+                            {(activeTicket.messages || []).map((msg, idx) => (
                                 <div key={idx} className={`flex ${msg.senderRole === 'CANDIDATE' ? 'justify-end' : 'justify-start'}`}>
                                     <div className={`max-w-[70%] p-3 rounded-2xl ${msg.senderRole === 'CANDIDATE' ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>
                                         <p>{msg.text}</p>

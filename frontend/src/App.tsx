@@ -46,29 +46,22 @@ function App() {
 
       try {
         if (user.role === 'ADMIN') {
-          const [cData, pData, tData] = await Promise.all([
-            api.getCandidates(),
-            api.getPlans(),
-            api.getTickets()
-          ]);
-          setCandidates(cData);
-          setPlans(pData);
-          setTickets(tData);
+          // Fetch independently to avoid one failure blocking all
+          api.getCandidates().then(setCandidates).catch(e => console.error("Candidates fetch failed", e));
+          api.getPlans().then(setPlans).catch(e => console.error("Plans fetch failed", e));
+          api.getTickets().then(setTickets).catch(e => console.error("Tickets fetch failed", e));
         } else if (user.role === 'CANDIDATE') {
           // For candidate, we need to find their candidate profile
-          const allCandidates = await api.getCandidates();
-          const me = allCandidates.find(c => c.user_id === parseInt(user.id));
-          if (me) setCandidate(me);
+          api.getCandidates().then(allCandidates => {
+            const me = allCandidates.find(c => c.user_id === parseInt(user.id));
+            if (me) setCandidate(me);
+          }).catch(e => console.error("Candidate profile fetch failed", e));
 
-          const [pData, tData] = await Promise.all([
-            api.getPlans(),
-            api.getTickets()
-          ]);
-          setPlans(pData);
-          setTickets(tData); // Filtered in component usually, or here
+          api.getPlans().then(setPlans).catch(e => console.error("Plans fetch failed", e));
+          api.getTickets().then(setTickets).catch(e => console.error("Tickets fetch failed", e));
         }
       } catch (e) {
-        console.error("Data fetch failed", e);
+        console.error("Data fetch setup failed", e);
       }
     };
 

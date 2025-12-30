@@ -68,8 +68,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
     const handleSavePlan = async (planData: Partial<Plan>) => {
         const token = localStorage.getItem('access_token');
         if (!token) return;
-        if (planData.id) { alert('ویرایش پلن نمایشی است'); }
-        else { const newPlan = await api.createPlan(planData as any, token); setPlans(prev => [...prev, newPlan]); }
+
+        if (planData.id) {
+            const updatedPlan = await api.updatePlan(planData.id, planData, token);
+            setPlans(prev => prev.map(p => p.id === planData.id ? updatedPlan : p));
+        } else {
+            const newPlan = await api.createPlan(planData as any, token);
+            setPlans(prev => [...prev, newPlan]);
+        }
     };
 
     const handleDeletePlan = async (id: string) => {
@@ -88,13 +94,51 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
             let attachmentUrl = undefined;
             let attachmentType = undefined;
             if (attachment) {
-                const formData = new FormData(); formData.append('file', attachment);
-                const res = await fetch('http://localhost:8000/api/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData });
-                const data = await res.json(); attachmentUrl = data.url; attachmentType = attachment.type.startsWith('image/') ? 'IMAGE' : 'FILE';
+                const formData = new FormData();
+                formData.append('file', attachment);
+
+                // Use api.uploadFile instead of direct fetch if possible, or keep direct fetch but use API_BASE
+                const API_BASE = "http://localhost:8000"; // Should ideally come from config
+                const res = await fetch(`${API_BASE}/api/upload`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    body: formData
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    attachmentUrl = data.url;
+                    attachmentType = attachment.type.startsWith('image/') ? 'IMAGE' : 'FILE';
+                }
             }
-            const newMsg = await api.addTicketMessage(ticketId, message || (attachment ? '[فایل]' : ''), 'ADMIN', token, attachmentUrl, attachmentType as any);
-            setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, lastUpdate: Date.now(), messages: [...t.messages, { id: newMsg.id.toString(), senderId: 'admin', senderRole: 'ADMIN', text: newMsg.text, timestamp: Date.now(), attachmentUrl }] } : t));
-        } finally { setIsUploading(false); }
+
+            const newMsg = await api.addTicketMessage(ticketId, message || (attachment ? 'فایل پیوست' : ''), 'ADMIN', token, attachmentUrl, attachmentType as any);
+
+            setTickets(prev => prev.map(t => {
+                if (t.id === ticketId) {
+                    return {
+                        ...t,
+                        lastUpdate: Date.now(),
+                        status: 'ANSWERED', // Update status locally
+                        messages: [...t.messages, {
+                            id: newMsg.id.toString(),
+                            senderId: 'admin',
+                            senderRole: 'ADMIN',
+                            text: newMsg.text,
+                            timestamp: Date.now(),
+                            attachmentUrl,
+                            attachmentType
+                        }]
+                    };
+                }
+                return t;
+            }));
+        } catch (error) {
+            console.error("Failed to send reply:", error);
+            alert("خطا در ارسال پیام");
+        } finally {
+            setIsUploading(false);
+        }
     };
 
     const handleSendAnnouncement = async (title: string, message: string, file?: File) => {
