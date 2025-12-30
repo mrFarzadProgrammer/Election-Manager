@@ -3,6 +3,7 @@ import { api } from '../../services/api';
 import { CandidateData, Plan, Ticket, Announcement } from '../../types';
 import { Users, CreditCard, MessageSquare, Megaphone, LogOut, LayoutDashboard, Menu, CheckSquare, User } from 'lucide-react';
 import CandidatesTab from './CandidatesTab';
+import CandidatesManagement from './CandidatesManagement';
 import PlansTab from './PlansTab';
 import TicketsTab from './TicketsTab';
 import AnnouncementsTab from './AnnouncementsTab';
@@ -42,6 +43,26 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
         if (!token) return;
         await api.deleteCandidate(id, token);
         setCandidates(prev => prev.filter(c => c.id !== id));
+    };
+
+    const handleAddCandidate = async (data: any) => {
+        const token = localStorage.getItem('access_token');
+        if (!token) return;
+        const newCandidate = await api.createCandidate(data, token);
+        setCandidates(prev => [...prev, newCandidate as any]);
+    };
+
+    const handleEditCandidate = async (id: string, data: any) => {
+        const token = localStorage.getItem('access_token');
+        if (!token) return;
+        const updatedCandidate = await api.updateCandidate(parseInt(id), data, token);
+        setCandidates(prev => prev.map(c => c.id === id ? { ...c, ...updatedCandidate as any } : c));
+    };
+
+    const handleResetPassword = async (id: string, password: string) => {
+        const token = localStorage.getItem('access_token');
+        if (!token) return;
+        await api.updateCandidate(parseInt(id), { password }, token);
     };
 
     const handleSavePlan = async (planData: Partial<Plan>) => {
@@ -151,7 +172,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
                 <div className='flex-1 overflow-y-auto p-4 lg:p-8'>
                     <div className='w-full mx-auto'>
                         {activeTab === 'DASHBOARD' && <DashboardTab candidates={candidates} />}
-                        {activeTab === 'CANDIDATES' && <CandidatesTab candidates={candidates} searchQuery={searchQuery} setSearchQuery={setSearchQuery} onEdit={() => { }} onDelete={handleDeleteCandidate} onToggleStatus={handleToggleStatus} />}
+                        {activeTab === 'CANDIDATES' && <CandidatesManagement candidates={candidates} searchQuery={searchQuery} setSearchQuery={setSearchQuery} onEdit={handleEditCandidate} onDelete={handleDeleteCandidate} onToggleStatus={handleToggleStatus} onAdd={handleAddCandidate} onResetPassword={handleResetPassword} />}
                         {activeTab === 'PLANS' && <PlansTab plans={plans} onSavePlan={handleSavePlan} onDeletePlan={handleDeletePlan} />}
                         {activeTab === 'TICKETS' && <TicketsTab tickets={tickets} onReply={handleTicketReply} onCloseTicket={() => { }} isUploading={isUploading} />}
                         {activeTab === 'ANNOUNCEMENTS' && <AnnouncementsTab announcements={announcements} onSendAnnouncement={handleSendAnnouncement} onDeleteAnnouncement={() => { }} isUploading={isUploading} />}

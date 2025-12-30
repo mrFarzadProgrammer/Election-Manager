@@ -192,7 +192,7 @@ def get_current_user(
 # CANDIDATES ENDPOINTS (Now operating on Users with role=CANDIDATE)
 # ============================================================================
 
-@app.get("/api/candidates")
+@app.get("/api/candidates", response_model=List[schemas.Candidate])
 def get_candidates(db: Session = Depends(database.get_db)):
     return db.query(models.User).filter(models.User.role == "CANDIDATE").all()
 
