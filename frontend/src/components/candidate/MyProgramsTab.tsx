@@ -24,7 +24,7 @@ const MyProgramsTab: React.FC<MyProgramsTabProps> = ({ candidate, onUpdate }) =>
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 h-full overflow-hidden">
             {/* Right Column (Forms) */}
             <div className="lg:col-span-8 xl:col-span-9 flex flex-col gap-5 pt-4 h-full overflow-y-auto pr-1 order-2 lg:order-1 no-scrollbar">
-                
+
                 <div className="bg-white p-6 rounded-2xl shadow-sm border flex-1 flex flex-col">
                     <h3 className="text-sm font-bold mb-6 text-gray-800 text-right">محتوای تبلیغاتی</h3>
 
