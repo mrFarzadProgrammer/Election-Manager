@@ -8,6 +8,7 @@ import TicketsTab from './TicketsTab';
 import AnnouncementsTab from './AnnouncementsTab';
 import InfoStatsTab from './InfoStatsTab';
 import MediaTab from './MediaTab';
+import MyProgramsTab from './MyProgramsTab';
 
 interface CandidatePanelProps {
     candidate: CandidateData;
@@ -119,14 +120,14 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                             <InfoStatsTab candidate={candidate} onUpdate={onUpdate} />
                         ) : activeTab === 'MEDIA' ? (
                             <MediaTab candidate={candidate} onUpdate={onUpdate} />
+                        ) : activeTab === 'MY_PLANS' ? (
+                            <MyProgramsTab candidate={candidate} onUpdate={onUpdate} />
                         ) : (
                             <div className="h-full overflow-y-auto pr-2 custom-scrollbar">
                                 {activeTab === 'BOT_SETTINGS' && <ProfileTab formData={formData} handleChange={handleChange} onSave={handleSaveProfile} />}
                                 {activeTab === 'PLANS' && <PlansTab plans={plans} onSelectPlan={(p) => { setSelectedPlan(p); setShowSubscriptionModal(true); }} />}
                                 {activeTab === 'TICKETS' && <TicketsTab tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} />}
                                 {activeTab === 'NOTIFICATIONS' && <AnnouncementsTab announcements={announcements} />}
-                                {/* Placeholders for new tabs */}
-                                {activeTab === 'MY_PLANS' && <div className="text-center text-gray-500 mt-10">بخش برنامه‌های من به زودی اضافه خواهد شد.</div>}
                             </div>
                         )}
                     </div>
