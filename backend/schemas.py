@@ -175,22 +175,6 @@ class Ticket(BaseModel):
 
     class Config:
         from_attributes = True
-    message: str # Initial message
-
-class TicketUpdate(BaseModel):
-    status: str
-
-class Ticket(BaseModel):
-    id: int
-    candidate_id: int
-    subject: str
-    status: str
-    created_at: datetime
-    updated_at: datetime
-    messages: List[TicketMessage] = []
-
-    class Config:
-        from_attributes = True
 
 class PasswordResetRequest(BaseModel):
     password: str = Field(min_length=4)

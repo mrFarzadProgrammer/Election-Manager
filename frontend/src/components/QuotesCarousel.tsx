@@ -31,7 +31,7 @@ export default function QuotesCarousel({ variant = 'fullscreen' }: QuotesCarouse
   const isWidget = variant === 'widget';
 
   return (
-    <div className={`relative w-full h-full flex flex-col justify-center items-center text-white overflow-hidden bg-gradient-to-br from-blue-600 to-blue-800 ${isWidget ? 'p-6' : 'p-12'}`}>
+    <div className={`relative w-full h-full flex flex-col justify-center items-center text-white overflow-hidden bg-gradient-to-br from-blue-600 to-blue-800 ${isWidget ? 'p-4' : 'p-12'}`}>
       {/* Background decoration */}
       <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
       <div className="absolute bottom-0 left-0 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2"></div>
@@ -41,11 +41,11 @@ export default function QuotesCarousel({ variant = 'fullscreen' }: QuotesCarouse
         <Quote size={isWidget ? 60 : 120} />
       </div>
 
-      <div className="z-10 max-w-2xl text-center space-y-4 animate-fade-in transition-all duration-700 ease-in-out flex flex-col items-center justify-center h-full" key={current}>
-        <p className={`${isWidget ? 'text-lg line-clamp-3' : 'text-2xl md:text-4xl'} font-bold leading-relaxed font-[Vazirmatn] drop-shadow-lg`}>
+      <div className="z-10 max-w-2xl text-center space-y-2 animate-fade-in transition-all duration-700 ease-in-out flex flex-col items-center justify-center h-full" key={current}>
+        <p className={`${isWidget ? 'text-lg' : 'text-2xl md:text-4xl'} font-bold leading-relaxed font-[Vazirmatn] drop-shadow-lg`}>
           «{QUOTES[current].text}»
         </p>
-        <div className="flex flex-col items-center gap-1 mt-auto">
+        <div className="flex flex-col items-center gap-1 mt-2">
           <div className={`bg-yellow-400 rounded-full mb-1 ${isWidget ? 'w-8 h-0.5' : 'w-16 h-1'}`}></div>
           <h3 className={`${isWidget ? 'text-sm' : 'text-xl'} font-bold text-yellow-100`}>{QUOTES[current].author}</h3>
           {!isWidget && <span className="text-sm text-blue-200">{QUOTES[current].role}</span>}

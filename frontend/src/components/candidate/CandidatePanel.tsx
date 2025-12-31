@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
 import { CandidateData, Plan, Ticket, Announcement } from '../../types';
-import { FileText, CreditCard, MessageSquare, Bell, LogOut, User, Menu, X } from 'lucide-react';
+import { FileText, CreditCard, MessageSquare, Bell, LogOut, User, Menu, X, LayoutDashboard, Image, Settings, List } from 'lucide-react';
 import ProfileTab from './ProfileTab';
 import PlansTab from './PlansTab';
 import TicketsTab from './TicketsTab';
 import AnnouncementsTab from './AnnouncementsTab';
+import InfoStatsTab from './InfoStatsTab';
 
 interface CandidatePanelProps {
     candidate: CandidateData;
@@ -17,7 +18,7 @@ interface CandidatePanelProps {
 }
 
 const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, plans, tickets, setTickets, onLogout }) => {
-    const [activeTab, setActiveTab] = useState<'PROFILE' | 'PLANS' | 'TICKETS' | 'NOTIFICATIONS'>('PROFILE');
+    const [activeTab, setActiveTab] = useState<'INFO_STATS' | 'MEDIA' | 'MY_PLANS' | 'BOT_SETTINGS' | 'PLANS' | 'TICKETS' | 'NOTIFICATIONS'>('INFO_STATS');
     const [formData, setFormData] = useState<CandidateData>(candidate);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -63,26 +64,69 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
     return (
         <div className='flex h-full relative bg-gray-50'>
             {isUploading && <div className='fixed inset-0 bg-black/50 z-[60] flex items-center justify-center'><div className='bg-white p-6 rounded-2xl'>در حال آپلود...</div></div>}
-            <aside className={`fixed lg:static inset-y-0 right-0 z-30 w-64 bg-white shadow-lg transform transition-transform duration-300 ${isMobileMenuOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}>
-                <div className='flex flex-col h-full'>
-                    <div className='p-6 border-b flex items-center gap-3'><div className='p-2 bg-blue-50 rounded-lg text-blue-600'><User size={24} /></div><h2 className='font-bold text-gray-800'>داشبورد کاندیدا</h2></div>
-                    <nav className='flex-1 p-4 space-y-2'>
-                        <button onClick={() => setActiveTab('PROFILE')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PROFILE' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><FileText size={20} /> اطلاعات</button>
-                        <button onClick={() => setActiveTab('PLANS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PLANS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><CreditCard size={20} /> اشتراک</button>
+            <aside className={`fixed lg:static inset-y-0 right-0 z-30 w-64 bg-gray-50 transform transition-transform duration-300 ${isMobileMenuOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} pt-0 pr-0 pb-4 pl-0`}>
+                <div className='flex flex-col h-full bg-white rounded-bl-3xl shadow-sm border-l border-b border-gray-200 overflow-hidden'>
+                    <div className='p-6 border-b flex items-center gap-3'>
+                        <div className='p-2 bg-blue-600 rounded-lg text-white shadow-lg shadow-blue-200'>
+                            <FileText size={24} />
+                        </div>
+                        <h2 className='font-bold text-gray-800 text-sm'>سامانه جامع انتخابات</h2>
+                    </div>
+                    <nav className='flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar'>
+                        <button onClick={() => setActiveTab('INFO_STATS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'INFO_STATS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><LayoutDashboard size={20} /> اطلاعات و آمار</button>
+                        <button onClick={() => setActiveTab('MEDIA')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'MEDIA' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Image size={20} /> رسانه و فایل</button>
+                        <button onClick={() => setActiveTab('MY_PLANS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'MY_PLANS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><List size={20} /> برنامه‌های من</button>
+                        <button onClick={() => setActiveTab('BOT_SETTINGS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'BOT_SETTINGS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Settings size={20} /> تنظیمات بات</button>
+                        <button onClick={() => setActiveTab('PLANS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PLANS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><CreditCard size={20} /> لیست پلن‌ها</button>
                         <button onClick={() => setActiveTab('TICKETS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'TICKETS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><MessageSquare size={20} /> پشتیبانی</button>
-                        <button onClick={() => setActiveTab('NOTIFICATIONS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'NOTIFICATIONS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Bell size={20} /> اطلاعیه‌ها</button>
                     </nav>
-                    <div className='p-4 border-t'><button onClick={onLogout} className='flex items-center gap-3 w-full p-3 text-red-600 hover:bg-red-50 rounded-xl'><LogOut size={20} /> خروج</button></div>
+                    <div className="px-4 mb-4 mt-auto">
+                        <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs font-bold text-blue-800">پلن فعال: پایه</span>
+                            </div>
+                            <div className="text-[10px] text-blue-600">
+                                اعتبار: ۳۹ روز
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </aside>
             <main className='flex-1 flex flex-col min-w-0 overflow-hidden h-screen'>
-                <header className='bg-white shadow-sm border-b px-6 py-4 flex items-center justify-between'><button className='lg:hidden' onClick={() => setIsMobileMenuOpen(true)}><Menu size={24} /></button><div className='mr-auto'>{candidate.name}</div></header>
-                <div className='flex-1 overflow-y-auto p-4 lg:p-8'>
-                    <div className='max-w-5xl mx-auto'>
-                        {activeTab === 'PROFILE' && <ProfileTab formData={formData} handleChange={handleChange} onSave={handleSaveProfile} />}
-                        {activeTab === 'PLANS' && <PlansTab plans={plans} onSelectPlan={(p) => { setSelectedPlan(p); setShowSubscriptionModal(true); }} />}
-                        {activeTab === 'TICKETS' && <TicketsTab tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} />}
-                        {activeTab === 'NOTIFICATIONS' && <AnnouncementsTab announcements={announcements} />}
+                <header className='bg-white shadow-sm border-b px-6 py-3 flex items-center justify-between'>
+                    <button className='lg:hidden' onClick={() => setIsMobileMenuOpen(true)}><Menu size={24} /></button>
+
+                    {/* User Profile Card (Left Side) */}
+                    <div className='mr-auto flex items-center gap-4'>
+                        <button onClick={onLogout} className='text-gray-400 hover:text-red-500 transition-colors'>
+                            <LogOut size={20} className="transform rotate-180" />
+                        </button>
+                        <div className='bg-gray-50 rounded-full pl-1 pr-4 py-1 flex items-center gap-3 border border-gray-100'>
+                            <div className='text-left'>
+                                <p className='text-sm font-bold text-gray-800'>{candidate.name}</p>
+                                <p className='text-[10px] text-gray-500'>نامزد انتخاباتی</p>
+                            </div>
+                            <div className='w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-600'>
+                                <User size={16} />
+                            </div>
+                        </div>
+                    </div>
+                </header>
+                <div className='flex-1 overflow-hidden p-2 lg:p-4 flex flex-col'>
+                    <div className='w-full h-full flex flex-col'>
+                        {activeTab === 'INFO_STATS' ? (
+                            <InfoStatsTab candidate={candidate} onUpdate={onUpdate} />
+                        ) : (
+                            <div className="h-full overflow-y-auto pr-2 custom-scrollbar">
+                                {activeTab === 'BOT_SETTINGS' && <ProfileTab formData={formData} handleChange={handleChange} onSave={handleSaveProfile} />}
+                                {activeTab === 'PLANS' && <PlansTab plans={plans} onSelectPlan={(p) => { setSelectedPlan(p); setShowSubscriptionModal(true); }} />}
+                                {activeTab === 'TICKETS' && <TicketsTab tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} />}
+                                {activeTab === 'NOTIFICATIONS' && <AnnouncementsTab announcements={announcements} />}
+                                {/* Placeholders for new tabs */}
+                                {activeTab === 'MEDIA' && <div className="text-center text-gray-500 mt-10">بخش رسانه و فایل به زودی اضافه خواهد شد.</div>}
+                                {activeTab === 'MY_PLANS' && <div className="text-center text-gray-500 mt-10">بخش برنامه‌های من به زودی اضافه خواهد شد.</div>}
+                            </div>
+                        )}
                     </div>
                 </div>
             </main>

@@ -53,7 +53,7 @@ function App() {
         } else if (user.role === 'CANDIDATE') {
           // For candidate, we need to find their candidate profile
           api.getCandidates().then(allCandidates => {
-            const me = allCandidates.find(c => c.user_id === parseInt(user.id));
+            const me = allCandidates.find(c => c.id === user.id);
             if (me) setCandidate(me);
           }).catch(e => console.error("Candidate profile fetch failed", e));
 
