@@ -9,6 +9,7 @@ import AnnouncementsTab from './AnnouncementsTab';
 import InfoStatsTab from './InfoStatsTab';
 import MediaTab from './MediaTab';
 import MyProgramsTab from './MyProgramsTab';
+import BotSettingsTab from './BotSettingsTab';
 
 interface CandidatePanelProps {
     candidate: CandidateData;
@@ -122,9 +123,10 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                             <MediaTab candidate={candidate} onUpdate={onUpdate} />
                         ) : activeTab === 'MY_PLANS' ? (
                             <MyProgramsTab candidate={candidate} onUpdate={onUpdate} />
+                        ) : activeTab === 'BOT_SETTINGS' ? (
+                            <BotSettingsTab candidate={candidate} onUpdate={onUpdate} />
                         ) : (
                             <div className="h-full overflow-y-auto pr-2 custom-scrollbar">
-                                {activeTab === 'BOT_SETTINGS' && <ProfileTab formData={formData} handleChange={handleChange} onSave={handleSaveProfile} />}
                                 {activeTab === 'PLANS' && <PlansTab plans={plans} onSelectPlan={(p) => { setSelectedPlan(p); setShowSubscriptionModal(true); }} />}
                                 {activeTab === 'TICKETS' && <TicketsTab tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} />}
                                 {activeTab === 'NOTIFICATIONS' && <AnnouncementsTab announcements={announcements} />}
