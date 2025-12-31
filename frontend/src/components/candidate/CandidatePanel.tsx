@@ -4,7 +4,7 @@ import { CandidateData, Plan, Ticket, Announcement } from '../../types';
 import { FileText, CreditCard, MessageSquare, Bell, LogOut, User, Menu, X, LayoutDashboard, Image, Settings, List } from 'lucide-react';
 import ProfileTab from './ProfileTab';
 import PlansList from './PlansList';
-import TicketsTab from './TicketsTab';
+import SupportChat from './SupportChat';
 import AnnouncementsTab from './AnnouncementsTab';
 import InfoStatsTab from './InfoStatsTab';
 import MediaTab from './MediaTab';
@@ -128,7 +128,7 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                         ) : (
                             <div className="h-full overflow-y-auto pr-2 custom-scrollbar">
                                 {activeTab === 'PLANS' && <PlansList plans={plans} onSelectPlan={(p) => { setSelectedPlan(p); setShowSubscriptionModal(true); }} />}
-                                {activeTab === 'TICKETS' && <TicketsTab tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} />}
+                                {activeTab === 'TICKETS' && <SupportChat tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} />}
                                 {activeTab === 'NOTIFICATIONS' && <AnnouncementsTab announcements={announcements} />}
                             </div>
                         )}
