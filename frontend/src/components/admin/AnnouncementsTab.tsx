@@ -39,31 +39,31 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements, onSe
                         ارسال اطلاعیه
                     </h3>
                 </div>
-                
+
                 <div className='space-y-4'>
                     <div>
                         <label className='block text-sm font-medium text-gray-700 mb-1'>عنوان</label>
-                        <input 
-                            value={title} 
-                            onChange={(e) => setTitle(e.target.value)} 
-                            className='w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition' 
-                            placeholder='عنوان اطلاعیه را وارد کنید...' 
+                        <input
+                            value={title}
+                            onChange={(e) => setTitle(e.target.value)}
+                            className='w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition'
+                            placeholder='عنوان اطلاعیه را وارد کنید...'
                         />
                     </div>
-                    
+
                     <div>
                         <label className='block text-sm font-medium text-gray-700 mb-1'>متن پیام</label>
-                        <textarea 
-                            value={message} 
-                            onChange={(e) => setMessage(e.target.value)} 
-                            className='w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 h-40 resize-none outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition' 
-                            placeholder='متن پیام خود را بنویسید...' 
+                        <textarea
+                            value={message}
+                            onChange={(e) => setMessage(e.target.value)}
+                            className='w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 h-40 resize-none outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition'
+                            placeholder='متن پیام خود را بنویسید...'
                         />
                     </div>
 
                     <div>
                         <label className='block text-sm font-medium text-gray-700 mb-1'>پیوست فایل (تصویر، ویدیو، صدا)</label>
-                        <div 
+                        <div
                             onClick={() => fileInputRef.current?.click()}
                             className={`border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition ${file ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50'}`}
                         >
@@ -76,8 +76,8 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements, onSe
                                         <p className='text-sm font-medium text-gray-800 truncate'>{file.name}</p>
                                         <p className='text-xs text-gray-500'>{(file.size / 1024 / 1024).toFixed(2)} MB</p>
                                     </div>
-                                    <button 
-                                        onClick={(e) => { e.stopPropagation(); setFile(null); if(fileInputRef.current) fileInputRef.current.value = ''; }}
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
                                         className='p-1 hover:bg-red-100 text-red-500 rounded-full transition'
                                     >
                                         <X size={18} />
@@ -95,18 +95,18 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements, onSe
                                 </>
                             )}
                         </div>
-                        <input 
-                            type='file' 
-                            ref={fileInputRef} 
-                            className='hidden' 
-                            accept='image/*,video/*,audio/*' 
-                            onChange={(e) => setFile(e.target.files?.[0] || null)} 
+                        <input
+                            type='file'
+                            ref={fileInputRef}
+                            className='hidden'
+                            accept='image/*,video/*,audio/*'
+                            onChange={(e) => setFile(e.target.files?.[0] || null)}
                         />
                     </div>
 
-                    <button 
-                        onClick={handleSend} 
-                        disabled={isUploading || !title || !message} 
+                    <button
+                        onClick={handleSend}
+                        disabled={isUploading || !title || !message}
                         className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition shadow-lg shadow-blue-600/20 ${isUploading || !title || !message ? 'bg-gray-300 text-gray-500 cursor-not-allowed shadow-none' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
                     >
                         {isUploading ? (
@@ -129,7 +129,7 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements, onSe
                         {announcements.length} مورد
                     </span>
                 </div>
-                
+
                 <div className='flex-1 overflow-y-auto p-6 space-y-4'>
                     {announcements.map(ann => (
                         <div key={ann.id} className='bg-gray-50 p-4 rounded-2xl border border-gray-100 hover:border-blue-200 transition group'>
@@ -145,15 +145,15 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements, onSe
                                         </span>
                                     </div>
                                 </div>
-                                <button 
-                                    onClick={() => onDeleteAnnouncement(ann.id)} 
+                                <button
+                                    onClick={() => onDeleteAnnouncement(ann.id)}
                                     className='p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition opacity-0 group-hover:opacity-100'
                                     title="حذف"
                                 >
                                     <Trash2 size={18} />
                                 </button>
                             </div>
-                            
+
                             <p className='text-gray-600 text-sm leading-relaxed mb-4 whitespace-pre-wrap pl-12'>
                                 {ann.content}
                             </p>
@@ -179,7 +179,7 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements, onSe
                             )}
                         </div>
                     ))}
-                    
+
                     {announcements.length === 0 && (
                         <div className='flex flex-col items-center justify-center h-full text-gray-400'>
                             <Megaphone size={48} className='mb-4 opacity-20' />

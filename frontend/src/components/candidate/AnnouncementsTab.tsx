@@ -20,7 +20,7 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements }) =>
                             <span className='text-xs text-gray-400'>{new Date(ann.created_at).toLocaleDateString('fa-IR')}</span>
                         </div>
                     </div>
-                    
+
                     <p className='text-gray-700 leading-relaxed mb-4 whitespace-pre-wrap'>
                         {ann.content}
                     </p>
