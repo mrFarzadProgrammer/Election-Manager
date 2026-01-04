@@ -97,6 +97,9 @@ class Candidate(BaseModel):
     vote_count: int = 0
     is_active: bool = True
     created_at_jalali: Optional[str] = None
+    active_plan_id: Optional[int] = None
+    plan_start_date: Optional[datetime] = None
+    plan_expires_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -135,6 +138,8 @@ class Plan(BaseModel):
     is_visible: bool
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    created_at_jalali: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -183,15 +188,13 @@ class PasswordResetRequest(BaseModel):
 class AnnouncementCreate(BaseModel):
     title: str
     content: str
-    media_url: Optional[str] = None
-    media_type: Optional[str] = None # IMAGE, VIDEO, VOICE
+    attachments: Optional[List[dict]] = None # List of {url, type}
 
 class Announcement(BaseModel):
     id: int
     title: str
     content: str
-    media_url: Optional[str] = None
-    media_type: Optional[str] = None
+    attachments: Optional[List[dict]] = None
     created_at: datetime
     created_at_jalali: Optional[str] = None
 

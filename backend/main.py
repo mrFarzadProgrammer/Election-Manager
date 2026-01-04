@@ -13,7 +13,7 @@ import os
 import shutil
 from dotenv import load_dotenv
 import jdatetime
-from datetime import datetime
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -127,6 +127,10 @@ class RegisterRequest(BaseModel):
     email: str
     full_name: Optional[str] = None
 
+class AssignPlanRequest(BaseModel):
+    plan_id: int
+    duration_days: int = 30
+
 # ============================================================================
 # AUTH ENDPOINTS
 # ============================================================================
@@ -194,7 +198,7 @@ def get_current_user(
 
 @app.get("/api/candidates", response_model=List[schemas.Candidate])
 def get_candidates(db: Session = Depends(database.get_db)):
-    return db.query(models.User).filter(models.User.role == "CANDIDATE").all()
+    return db.query(models.User).filter(models.User.role == "CANDIDATE").order_by(models.User.id.desc()).all()
 
 @app.get("/api/candidates/{candidate_id}", response_model=schemas.Candidate)
 def get_candidate(candidate_id: int, db: Session = Depends(database.get_db)):
@@ -342,6 +346,29 @@ def reset_candidate_password(
 
     candidate.hashed_password = auth.get_password_hash(body.password)
     db.add(candidate)
+@app.post("/api/candidates/{candidate_id}/assign-plan")
+def assign_plan_to_candidate(
+    candidate_id: int,
+    request: AssignPlanRequest,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_admin_user),
+):
+    candidate = db.query(models.User).filter(models.User.id == candidate_id, models.User.role == "CANDIDATE").first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="کاندید یافت نشد")
+    
+    plan = db.query(models.Plan).filter(models.Plan.id == request.plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="پلن یافت نشد")
+
+    now = datetime.utcnow()
+    candidate.active_plan_id = plan.id
+    candidate.plan_start_date = now
+    candidate.plan_expires_at = now + timedelta(days=request.duration_days)
+    
+    db.commit()
+    return {"message": "پلن با موفقیت فعال شد"}
+
     db.commit()
 
     return {"detail": "رمز عبور با موفقیت تغییر کرد"}
@@ -352,7 +379,7 @@ def reset_candidate_password(
 
 @app.get("/api/plans")
 def get_plans(db: Session = Depends(database.get_db)):
-    return db.query(models.Plan).all()
+    return db.query(models.Plan).order_by(models.Plan.id.desc()).all()
 
 @app.post("/api/plans", response_model=schemas.Plan)
 def create_plan(
@@ -361,7 +388,11 @@ def create_plan(
     current_user: models.User = Depends(auth.get_admin_user),
 ):
     data = plan_data.model_dump(exclude_unset=True)
-    new_plan = models.Plan(**data)
+    
+    now_jalali = jdatetime.datetime.now()
+    created_at_jalali = now_jalali.strftime("%Y/%m/%d %H:%M:%S")
+    
+    new_plan = models.Plan(**data, created_at_jalali=created_at_jalali)
     db.add(new_plan)
     db.commit()
     db.refresh(new_plan)
@@ -406,7 +437,7 @@ def delete_plan(
 
 @app.get("/api/tickets", response_model=List[schemas.Ticket])
 def get_tickets(db: Session = Depends(database.get_db)):
-    return db.query(models.Ticket).all()
+    return db.query(models.Ticket).order_by(models.Ticket.id.desc()).all()
 
 @app.post("/api/tickets", response_model=schemas.Ticket)
 def create_ticket(
@@ -493,7 +524,7 @@ def update_ticket_status(
 
 @app.get("/api/announcements", response_model=List[schemas.Announcement])
 def get_announcements(db: Session = Depends(database.get_db)):
-    return db.query(models.Announcement).order_by(models.Announcement.created_at.desc()).all()
+    return db.query(models.Announcement).order_by(models.Announcement.id.desc()).all()
 
 @app.post("/api/announcements", response_model=schemas.Announcement)
 def create_announcement(
@@ -507,8 +538,7 @@ def create_announcement(
     new_announcement = models.Announcement(
         title=announcement.title,
         content=announcement.content,
-        media_url=announcement.media_url,
-        media_type=announcement.media_type,
+        attachments=announcement.attachments,
         created_at_jalali=created_at_jalali
     )
     db.add(new_announcement)

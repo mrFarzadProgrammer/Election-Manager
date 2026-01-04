@@ -34,8 +34,14 @@ class User(Base):
     vote_count = Column(Integer, default=0)
     created_at_jalali = Column(String, nullable=True)
 
+    # Subscription Fields
+    active_plan_id = Column(Integer, ForeignKey("plans.id"), nullable=True)
+    plan_start_date = Column(DateTime, nullable=True)
+    plan_expires_at = Column(DateTime, nullable=True)
+
     # Relationships
-    plans = relationship("Plan", back_populates="user", cascade="all, delete-orphan")
+    plans = relationship("Plan", back_populates="user", foreign_keys="[Plan.user_id]", cascade="all, delete-orphan")
+    active_plan = relationship("Plan", foreign_keys=[active_plan_id])
     tickets = relationship("Ticket", back_populates="user")
     
     class Config:
@@ -54,8 +60,10 @@ class Plan(Base):
     is_visible = Column(Boolean, default=True)
     start_date = Column(DateTime, nullable=True)
     end_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at_jalali = Column(String, nullable=True)
 
-    user = relationship("User", back_populates="plans")
+    user = relationship("User", back_populates="plans", foreign_keys=[user_id])
 
 class Ticket(Base):
     __tablename__ = "tickets"
@@ -101,7 +109,6 @@ class Announcement(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
     content = Column(String)
-    media_url = Column(String, nullable=True)
-    media_type = Column(String, nullable=True) # IMAGE, VIDEO, VOICE, TEXT
+    attachments = Column(JSON, nullable=True) # List of {url, type}
     created_at = Column(DateTime, default=datetime.utcnow)
     created_at_jalali = Column(String, nullable=True)
