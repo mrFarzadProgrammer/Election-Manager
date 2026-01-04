@@ -29,6 +29,9 @@ export interface CandidateData {
     voice_url?: string;
     socials?: any;
     bot_config?: any;
+    active_plan_id?: string;
+    plan_start_date?: string;
+    plan_expires_at?: string;
 }
 
 export interface Plan {
@@ -39,6 +42,7 @@ export interface Plan {
     features: string[];
     color: string;
     is_visible: boolean;
+    created_at_jalali?: string;
 }
 
 export interface Ticket {
@@ -65,6 +69,5 @@ export interface Announcement {
     title: string;
     content: string;
     created_at: string;
-    media_url?: string;
-    media_type?: 'IMAGE' | 'VIDEO' | 'VOICE' | 'FILE';
+    attachments?: { url: string; type: 'IMAGE' | 'VIDEO' | 'VOICE' | 'FILE' }[];
 }

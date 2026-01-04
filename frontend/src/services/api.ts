@@ -70,6 +70,9 @@ const mapCandidate = (c: any): Candidate => ({
     isActive: c.is_active ?? c.isActive,
     userCount: c.vote_count ?? c.userCount ?? 0,
     created_at_jalali: c.created_at_jalali || c.createdAtJalali,
+    active_plan_id: c.active_plan_id ? String(c.active_plan_id) : undefined,
+    plan_start_date: c.plan_start_date,
+    plan_expires_at: c.plan_expires_at,
 });
 
 const mapPlan = (p: any): Plan => ({
@@ -77,7 +80,8 @@ const mapPlan = (p: any): Plan => ({
     id: String(p.id),
     price: String(p.price),
     features: p.features || [],
-    is_visible: p.is_visible ?? false
+    is_visible: p.is_visible ?? false,
+    created_at_jalali: p.created_at_jalali
 });
 
 const mapTicket = (t: any): Ticket => ({
@@ -212,6 +216,17 @@ export const api = {
         });
     },
 
+    assignPlan: async (candidateId: string, planId: string, durationDays: number = 30, token: string): Promise<any> => {
+        return request<any>(`/api/candidates/${candidateId}/assign-plan`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ plan_id: parseInt(planId), duration_days: durationDays }),
+        });
+    },
+
     // ========== Plans ==========
     getPlans: async (): Promise<Plan[]> => {
         try {
@@ -304,14 +319,14 @@ export const api = {
         return request<Announcement[]>("/api/announcements");
     },
 
-    createAnnouncement: async (title: string, message: string, mediaUrl: string | undefined, mediaType: string | undefined, token: string): Promise<Announcement> => {
+    createAnnouncement: async (title: string, message: string, attachments: { url: string, type: string }[], token: string): Promise<Announcement> => {
         return request<Announcement>("/api/announcements", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${token}`,
             },
-            body: JSON.stringify({ title, content: message, media_url: mediaUrl, media_type: mediaType }),
+            body: JSON.stringify({ title, content: message, attachments }),
         });
     },
 };

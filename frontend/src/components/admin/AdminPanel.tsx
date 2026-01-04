@@ -49,7 +49,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
         const token = localStorage.getItem('access_token');
         if (!token) return;
         const newCandidate = await api.createCandidate(data, token);
-        setCandidates(prev => [...prev, newCandidate as any]);
+        setCandidates(prev => [newCandidate as any, ...prev]);
     };
 
     const handleEditCandidate = async (id: string, data: any) => {
@@ -65,16 +65,28 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
         await api.updateCandidate(parseInt(id), { password }, token);
     };
 
+    const handleAssignPlan = async (candidateId: string, planId: string) => {
+        const token = localStorage.getItem('access_token');
+        if (!token) return;
+        await api.assignPlan(candidateId, planId, 30, token);
+        setCandidates(prev => prev.map(c => c.id === candidateId ? { ...c, active_plan_id: planId } : c));
+    };
+
     const handleSavePlan = async (planData: Partial<Plan>) => {
         const token = localStorage.getItem('access_token');
         if (!token) return;
 
-        if (planData.id) {
-            const updatedPlan = await api.updatePlan(planData.id, planData, token);
-            setPlans(prev => prev.map(p => p.id === planData.id ? updatedPlan : p));
-        } else {
-            const newPlan = await api.createPlan(planData as any, token);
-            setPlans(prev => [...prev, newPlan]);
+        try {
+            if (planData.id) {
+                const updatedPlan = await api.updatePlan(planData.id, planData, token);
+                setPlans(prev => prev.map(p => p.id === planData.id ? updatedPlan : p));
+            } else {
+                const newPlan = await api.createPlan(planData as any, token);
+                setPlans(prev => [newPlan, ...prev]);
+            }
+        } catch (error) {
+            console.error("Failed to save plan:", error);
+            alert("خطا در ذخیره پلن");
         }
     };
 
@@ -141,15 +153,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
         }
     };
 
-    const handleSendAnnouncement = async (title: string, message: string, file?: File) => {
+    const handleSendAnnouncement = async (title: string, message: string, files: File[]) => {
         const token = localStorage.getItem('access_token');
         if (!token) return;
         setIsUploading(true);
         try {
-            let mediaUrl = undefined;
-            let mediaType = undefined;
+            const attachments: { url: string, type: string }[] = [];
 
-            if (file) {
+            for (const file of files) {
                 const formData = new FormData();
                 formData.append('file', file);
                 const res = await fetch('http://localhost:8000/api/upload', {
@@ -160,17 +171,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
 
                 if (res.ok) {
                     const data = await res.json();
-                    mediaUrl = data.url;
+                    let type = 'FILE';
+                    if (file.type.startsWith('image/')) type = 'IMAGE';
+                    else if (file.type.startsWith('video/')) type = 'VIDEO';
+                    else if (file.type.startsWith('audio/')) type = 'VOICE';
 
-                    if (file.type.startsWith('image/')) mediaType = 'IMAGE';
-                    else if (file.type.startsWith('video/')) mediaType = 'VIDEO';
-                    else if (file.type.startsWith('audio/')) mediaType = 'VOICE';
-                    else mediaType = 'FILE';
+                    attachments.push({ url: data.url, type });
                 }
             }
 
-            const newAnn = await api.createAnnouncement(title, message, mediaUrl, mediaType, token);
+            const newAnn = await api.createAnnouncement(title, message, attachments, token);
             setAnnouncements(prev => [newAnn, ...prev]);
+            alert("اطلاعیه با موفقیت ارسال شد");
         } catch (error) {
             console.error("Failed to send announcement:", error);
             alert("خطا در ارسال اطلاعیه");
@@ -237,8 +249,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
 
                 <div className='flex-1 overflow-y-auto p-4 lg:p-8'>
                     <div className='w-full mx-auto'>
-                        {activeTab === 'DASHBOARD' && <DashboardTab candidates={candidates} />}
-                        {activeTab === 'CANDIDATES' && <CandidatesManagement candidates={candidates} searchQuery={searchQuery} setSearchQuery={setSearchQuery} onEdit={handleEditCandidate} onDelete={handleDeleteCandidate} onToggleStatus={handleToggleStatus} onAdd={handleAddCandidate} onResetPassword={handleResetPassword} />}
+                        {activeTab === 'DASHBOARD' && <DashboardTab candidates={candidates} plans={plans} tickets={tickets} />}
+                        {activeTab === 'CANDIDATES' && <CandidatesManagement candidates={candidates} plans={plans} searchQuery={searchQuery} setSearchQuery={setSearchQuery} onEdit={handleEditCandidate} onDelete={handleDeleteCandidate} onToggleStatus={handleToggleStatus} onAdd={handleAddCandidate} onResetPassword={handleResetPassword} onAssignPlan={handleAssignPlan} />}
                         {activeTab === 'PLANS' && <PlansTab plans={plans} onSavePlan={handleSavePlan} onDeletePlan={handleDeletePlan} />}
                         {activeTab === 'TICKETS' && <TicketsTab tickets={tickets} onReply={handleTicketReply} onCloseTicket={() => { }} isUploading={isUploading} />}
                         {activeTab === 'ANNOUNCEMENTS' && <AnnouncementsTab announcements={announcements} onSendAnnouncement={handleSendAnnouncement} onDeleteAnnouncement={() => { }} isUploading={isUploading} />}

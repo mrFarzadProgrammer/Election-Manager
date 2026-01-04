@@ -1,51 +1,77 @@
 import React from 'react';
-import { CandidateData } from '../../types';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Users, UserCheck, Bot, Activity, LayoutDashboard, Quote } from 'lucide-react';
+import { CandidateData, Plan, Ticket } from '../../types';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import { Users, UserCheck, Bot, Activity, CreditCard, MessageSquare, DollarSign } from 'lucide-react';
 
 interface DashboardTabProps {
     candidates: CandidateData[];
+    plans: Plan[];
+    tickets: Ticket[];
 }
 
-const DashboardTab: React.FC<DashboardTabProps> = ({ candidates }) => {
-    // Calculate stats
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
+
+const DashboardTab: React.FC<DashboardTabProps> = ({ candidates, plans, tickets }) => {
+    // Stats Calculations
     const totalCandidates = candidates.length;
     const activeCandidates = candidates.filter(c => c.is_active).length;
-    // Assuming bot_token presence indicates a bot is configured
     const totalBots = candidates.filter(c => c.bot_token).length;
-    // Assuming bot is active if candidate is active and has token
     const activeBots = candidates.filter(c => c.bot_token && c.is_active).length;
 
-    // Prepare chart data
-    // Using vote_count as a proxy for "audience" or "users"
-    // If vote_count is not available, we default to 0
-    const chartData = candidates.map(c => ({
-        name: c.full_name || c.username || 'نامشخص',
-        users: c.vote_count || 0
+    // Ticket Stats
+    const openTickets = tickets.filter(t => t.status === 'OPEN').length;
+    const closedTickets = tickets.filter(t => t.status === 'CLOSED').length;
+    const answeredTickets = tickets.filter(t => t.status === 'ANSWERED').length;
+
+    // Revenue & Plan Distribution
+    let totalRevenue = 0;
+    const planCounts: { [key: string]: number } = {};
+
+    candidates.forEach(c => {
+        if (c.active_plan_id) {
+            const plan = plans.find(p => p.id.toString() === c.active_plan_id?.toString());
+            if (plan) {
+                // Revenue
+                const price = parseInt(plan.price.replace(/,/g, '')) || 0;
+                totalRevenue += price;
+
+                // Distribution
+                planCounts[plan.title] = (planCounts[plan.title] || 0) + 1;
+            }
+        }
+    });
+
+    const planChartData = Object.keys(planCounts).map(key => ({
+        name: key,
+        value: planCounts[key]
     }));
 
-    return (
-        <div className="space-y-6 animate-fade-in">
-            {/* Quote Banner */}
-            <div className="bg-gradient-to-r from-blue-900 to-blue-700 rounded-2xl p-8 text-white text-center relative overflow-hidden shadow-lg">
-                <div className="absolute top-6 left-8 opacity-20">
-                    <svg width="100" height="100" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M14.017 21L14.017 18C14.017 16.8954 13.1216 16 12.017 16H9.01703C7.91246 16 7.01703 16.8954 7.01703 18L7.01703 21H2.01703V7H16.017V21H14.017ZM18.017 5V21H22.017V5H18.017Z" style={{ display: 'none' }} />
-                        <path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z" />
-                    </svg>
-                </div>
-                <div className="relative z-10">
-                    <h2 className="text-xl md:text-2xl font-bold mb-4 leading-relaxed">
-                        «انتخابات مظهر اقتدار ملی است؛ اگر اقتدار ملی نبود، امنیت ملی هم نخواهد بود.»
-                    </h2>
-                    <p className="text-blue-200 text-sm">مقام معظم رهبری</p>
-                    <div className="absolute top-0 right-0 bg-blue-800/50 px-3 py-1 rounded-full text-xs backdrop-blur-sm border border-blue-400/30">
-                        سخن روز
-                    </div>
-                </div>
-            </div>
+    const ticketChartData = [
+        { name: 'باز', value: openTickets },
+        { name: 'پاسخ داده شده', value: answeredTickets },
+        { name: 'بسته شده', value: closedTickets },
+    ].filter(d => d.value > 0);
 
-            {/* Stats Cards */}
+    // User Growth Chart (Mock/Real)
+    const [selectedCity, setSelectedCity] = React.useState<string>('all');
+
+    // Extract unique cities
+    const cities = Array.from(new Set(candidates.map(c => c.city).filter(Boolean))) as string[];
+
+    // Filter and Sort Candidates
+    const topCandidates = candidates
+        .filter(c => selectedCity === 'all' || c.city === selectedCity)
+        .sort((a, b) => (b.vote_count || 0) - (a.vote_count || 0))
+        .slice(0, 10)
+        .map(c => ({
+            name: c.full_name || c.username || 'نامشخص',
+            users: c.vote_count || 0,
+            city: c.city
+        }));
+
+    return (
+        <div className="space-y-6 animate-fade-in pb-10">
+            {/* Top Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard
                     title="کل کاندیداها"
@@ -54,53 +80,95 @@ const DashboardTab: React.FC<DashboardTabProps> = ({ candidates }) => {
                     bg="bg-blue-50"
                 />
                 <StatCard
-                    title="کاندیدای فعال"
-                    value={activeCandidates}
-                    icon={<UserCheck className="w-6 h-6 text-green-600" />}
+                    title="درآمد تقریبی (تومان)"
+                    value={totalRevenue.toLocaleString()}
+                    icon={<DollarSign className="w-6 h-6 text-green-600" />}
                     bg="bg-green-50"
                 />
                 <StatCard
-                    title="کل بات‌ها"
-                    value={totalBots}
-                    icon={<Bot className="w-6 h-6 text-purple-600" />}
-                    bg="bg-purple-50"
+                    title="تیکت‌های باز"
+                    value={openTickets}
+                    icon={<MessageSquare className="w-6 h-6 text-orange-600" />}
+                    bg="bg-orange-50"
                 />
                 <StatCard
                     title="بات‌های فعال"
                     value={activeBots}
-                    icon={<Activity className="w-6 h-6 text-indigo-600" />}
-                    bg="bg-indigo-50"
+                    icon={<Bot className="w-6 h-6 text-purple-600" />}
+                    bg="bg-purple-50"
                 />
             </div>
 
-            {/* Chart Section */}
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-lg font-bold text-gray-700 flex items-center gap-2">
-                        <Users className="w-5 h-5 text-blue-500" />
-                        آمار جذب مخاطب کاندیداها
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Plan Distribution Chart */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <h3 className="text-lg font-bold text-gray-700 flex items-center gap-2 mb-6">
+                        <CreditCard className="w-5 h-5 text-indigo-500" />
+                        توزیع پلن‌های خریداری شده
                     </h3>
+                    <div className="h-[300px] w-full" dir="ltr">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                                <Pie
+                                    data={planChartData}
+                                    cx="50%"
+                                    cy="50%"
+                                    labelLine={false}
+                                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                    outerRadius={100}
+                                    fill="#8884d8"
+                                    dataKey="value"
+                                >
+                                    {planChartData.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                    ))}
+                                </Pie>
+                                <Tooltip />
+                            </PieChart>
+                        </ResponsiveContainer>
+                    </div>
                 </div>
-                <div className="h-[400px] w-full" dir="ltr">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                            <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#6b7280' }} dy={10} />
-                            <YAxis axisLine={false} tickLine={false} tick={{ fill: '#6b7280' }} />
-                            <Tooltip
-                                cursor={{ fill: '#f3f4f6' }}
-                                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                            />
-                            <Bar dataKey="users" name="تعداد کاربر" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={40} />
-                        </BarChart>
-                    </ResponsiveContainer>
+
+                {/* Top Candidates Chart */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <div className="flex justify-between items-center mb-6">
+                        <h3 className="text-lg font-bold text-gray-700 flex items-center gap-2">
+                            <Activity className="w-5 h-5 text-green-500" />
+                            ۱۰ کاندیدای برتر
+                        </h3>
+                        <select
+                            className="bg-gray-50 border border-gray-200 text-gray-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none"
+                            value={selectedCity}
+                            onChange={(e) => setSelectedCity(e.target.value)}
+                        >
+                            <option value="all">همه شهرها</option>
+                            {cities.map(city => (
+                                <option key={city} value={city}>{city}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="h-[300px] w-full" dir="ltr">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={topCandidates} layout="vertical" margin={{ left: 40 }}>
+                                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                                <XAxis type="number" />
+                                <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 12 }} />
+                                <Tooltip
+                                    cursor={{ fill: 'transparent' }}
+                                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                                />
+                                <Bar dataKey="users" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={20} name="تعداد آرا" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
                 </div>
             </div>
         </div>
     );
 };
 
-const StatCard = ({ title, value, icon, bg }: { title: string, value: number, icon: React.ReactNode, bg: string }) => (
+const StatCard = ({ title, value, icon, bg }: { title: string, value: string | number, icon: React.ReactNode, bg: string }) => (
     <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between hover:shadow-md transition-shadow">
         <div className="text-right">
             <p className="text-gray-500 text-sm mb-1">{title}</p>
