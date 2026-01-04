@@ -249,7 +249,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
 
                 <div className='flex-1 overflow-y-auto p-4 lg:p-8'>
                     <div className='w-full mx-auto'>
-                        {activeTab === 'DASHBOARD' && <DashboardTab candidates={candidates} plans={plans} tickets={tickets} />}
+                        {activeTab === 'DASHBOARD' && <DashboardTab candidates={candidates} plans={plans} tickets={tickets} onTabChange={setActiveTab} />}
                         {activeTab === 'CANDIDATES' && <CandidatesManagement candidates={candidates} plans={plans} searchQuery={searchQuery} setSearchQuery={setSearchQuery} onEdit={handleEditCandidate} onDelete={handleDeleteCandidate} onToggleStatus={handleToggleStatus} onAdd={handleAddCandidate} onResetPassword={handleResetPassword} onAssignPlan={handleAssignPlan} />}
                         {activeTab === 'PLANS' && <PlansTab plans={plans} onSavePlan={handleSavePlan} onDeletePlan={handleDeletePlan} />}
                         {activeTab === 'TICKETS' && <TicketsTab tickets={tickets} onReply={handleTicketReply} onCloseTicket={() => { }} isUploading={isUploading} />}

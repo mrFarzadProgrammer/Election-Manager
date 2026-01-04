@@ -107,7 +107,26 @@ def seed_database():
         # 3. ایجاد ۲۰ کاندیدای نمونه
         first_names = ["علی", "محمد", "رضا", "حسین", "مهدی", "حسن", "سعید", "حمید", "محسن", "احمد", "سارا", "مریم", "زهرا", "فاطمه", "نرگس", "کیان", "آرش", "کوروش", "داریوش", "بهرام"]
         last_names = ["رضایی", "محمدی", "حسینی", "احمدی", "کریمی", "موسوی", "جعفری", "صادقی", "رحیمی", "کاظمی", "عباسی", "باقری", "زندی", "راد", "تهرانی", "شیرازی", "تبریزی", "کرمانی", "یزدانی", "نوری"]
-        cities = ["تهران", "مشهد", "اصفهان", "شیراز", "تبریز", "کرج", "اهواز", "قم", "رشت", "ساری", "کرمان", "ارومیه", "یزد", "همدان", "زاهدان"]
+        
+        city_province_map = {
+            "تهران": "تهران",
+            "مشهد": "خراسان رضوی",
+            "اصفهان": "اصفهان",
+            "شیراز": "فارس",
+            "تبریز": "آذربایجان شرقی",
+            "کرج": "البرز",
+            "اهواز": "خوزستان",
+            "قم": "قم",
+            "رشت": "گیلان",
+            "ساری": "مازندران",
+            "کرمان": "کرمان",
+            "ارومیه": "آذربایجان غربی",
+            "یزد": "یزد",
+            "همدان": "همدان",
+            "زاهدان": "سیستان و بلوچستان"
+        }
+        cities = list(city_province_map.keys())
+        
         slogans = [
             "برای آینده‌ای بهتر", "تغییر برای پیشرفت", "صدای مردم", "خدمت صادقانه", 
             "شفافیت و عدالت", "شهر هوشمند، شهروند شاد", "با هم می‌سازیم", "تدبیر و امید",
@@ -139,6 +158,9 @@ def seed_database():
                 while db.query(models.User).filter(models.User.phone == phone).first():
                     phone = f"0912{random.randint(1000000, 9999999)}"
 
+                selected_city = random.choice(cities)
+                selected_province = city_province_map[selected_city]
+
                 new_candidate = models.User(
                     username=username,
                     email=f"{username}@example.com",
@@ -147,7 +169,8 @@ def seed_database():
                     hashed_password=auth.get_password_hash("123456"), # رمز پیش‌فرض
                     role="CANDIDATE",
                     is_active=True,
-                    city=random.choice(cities),
+                    city=selected_city,
+                    province=selected_province,
                     slogan=random.choice(slogans),
                     bio=f"من {full_name} هستم، کاندیدای شورای شهر با هدف خدمت به مردم و ارتقای سطح زندگی شهروندان.",
                     bot_name=f"{username}_bot",
