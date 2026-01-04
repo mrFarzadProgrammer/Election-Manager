@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Plan } from '../../types';
-import { Plus, Edit, Eye, EyeOff, Check, X } from 'lucide-react';
+import { Plus, Edit, Eye, EyeOff, Check, X, Trash2 } from 'lucide-react';
 
 interface PlansTabProps {
     plans: Plan[];
@@ -25,8 +25,21 @@ const PlansTab: React.FC<PlansTabProps> = ({ plans, onSavePlan, onDeletePlan }) 
     };
 
     const handleSave = () => {
-        if (!editingPlan.title || !editingPlan.price) return;
-        onSavePlan(editingPlan);
+        if (!editingPlan.title || !editingPlan.price) {
+            alert("لطفا عنوان و قیمت را وارد کنید");
+            return;
+        }
+
+        // Clean up features
+        const cleanedFeatures = (editingPlan.features || [])
+            .map(f => f.trim())
+            .filter(f => f.length > 0);
+
+        console.log("Saving plan:", { ...editingPlan, features: cleanedFeatures });
+        onSavePlan({
+            ...editingPlan,
+            features: cleanedFeatures
+        });
         setIsModalOpen(false);
         setEditingPlan({});
     };
@@ -64,10 +77,13 @@ const PlansTab: React.FC<PlansTabProps> = ({ plans, onSavePlan, onDeletePlan }) 
                         {/* Header */}
                         <div style={{ backgroundColor: plan.color }} className='p-4 text-white relative h-24 flex flex-col items-center justify-center'>
                             <div className='absolute top-3 left-3 flex gap-2'>
-                                <button onClick={() => handleEdit(plan)} className='text-white/80 hover:text-white transition'>
+                                <button onClick={() => onDeletePlan(plan.id)} className='text-white/80 hover:text-red-200 transition' title="حذف">
+                                    <Trash2 size={16} />
+                                </button>
+                                <button onClick={() => handleEdit(plan)} className='text-white/80 hover:text-white transition' title="ویرایش">
                                     <Edit size={16} />
                                 </button>
-                                <button onClick={() => toggleVisibility(plan)} className='text-white/80 hover:text-white transition'>
+                                <button onClick={() => toggleVisibility(plan)} className='text-white/80 hover:text-white transition' title={plan.is_visible ? "مخفی کردن" : "نمایش"}>
                                     {plan.is_visible ? <Eye size={16} /> : <EyeOff size={16} />}
                                 </button>
                             </div>
@@ -78,8 +94,13 @@ const PlansTab: React.FC<PlansTabProps> = ({ plans, onSavePlan, onDeletePlan }) 
                         {/* Price */}
                         <div className='py-6 text-center border-b border-gray-100'>
                             <div className='text-2xl font-bold text-gray-800'>
-                                {Number(plan.price).toLocaleString('fa-IR')} <span className='text-sm font-normal text-gray-500'>تومان</span>
+                                {Number(String(plan.price).replace(/,/g, '')).toLocaleString('fa-IR')} <span className='text-sm font-normal text-gray-500'>تومان</span>
                             </div>
+                            {plan.created_at_jalali && (
+                                <div className="text-[10px] text-gray-400 mt-2 font-mono">
+                                    ایجاد: {plan.created_at_jalali}
+                                </div>
+                            )}
                         </div>
 
                         {/* Features */}
@@ -123,7 +144,7 @@ const PlansTab: React.FC<PlansTabProps> = ({ plans, onSavePlan, onDeletePlan }) 
                                 <label className="block text-sm font-medium text-gray-700 mb-1">قیمت (تومان)</label>
                                 <input
                                     type="text"
-                                    value={editingPlan.price ? Number(editingPlan.price).toLocaleString() : ''}
+                                    value={editingPlan.price ? Number(String(editingPlan.price).replace(/,/g, '')).toLocaleString('en-US') : ''}
                                     onChange={e => {
                                         const val = e.target.value.replace(/,/g, '');
                                         if (!isNaN(Number(val))) {
@@ -197,7 +218,7 @@ const PlansTab: React.FC<PlansTabProps> = ({ plans, onSavePlan, onDeletePlan }) 
                                     {/* Price */}
                                     <div className='py-6 text-center border-b border-gray-100'>
                                         <div className='text-2xl font-bold text-gray-800'>
-                                            {editingPlan.price ? Number(editingPlan.price).toLocaleString('fa-IR') : '0'} <span className='text-sm font-normal text-gray-500'>تومان</span>
+                                            {editingPlan.price ? Number(String(editingPlan.price).replace(/,/g, '')).toLocaleString('fa-IR') : '0'} <span className='text-sm font-normal text-gray-500'>تومان</span>
                                         </div>
                                     </div>
 
@@ -216,17 +237,6 @@ const PlansTab: React.FC<PlansTabProps> = ({ plans, onSavePlan, onDeletePlan }) 
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                                <input
-                                    type="checkbox"
-                                    id="isVisible"
-                                    checked={editingPlan.is_visible ?? true}
-                                    onChange={e => setEditingPlan({ ...editingPlan, is_visible: e.target.checked })}
-                                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                                />
-                                <label htmlFor="isVisible" className="text-sm text-gray-700">نمایش به کاربران</label>
                             </div>
                         </div>
 

@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
-import { CandidateData } from '../../types';
-import { Search, Plus, ChevronLeft, ChevronRight, Bot, X, Key, Edit } from 'lucide-react';
+import { CandidateData, Plan } from '../../types';
+import { Search, Plus, ChevronLeft, ChevronRight, Bot, X, Key, Edit, CreditCard } from 'lucide-react';
+import { api } from '../../services/api';
 
 interface CandidatesManagementProps {
     candidates: CandidateData[];
+    plans: Plan[];
     searchQuery: string;
     setSearchQuery: (query: string) => void;
     onEdit: (id: string, data: any) => Promise<void>;
@@ -11,24 +13,30 @@ interface CandidatesManagementProps {
     onToggleStatus: (id: string, currentStatus: boolean) => void;
     onAdd: (data: any) => Promise<void>;
     onResetPassword: (id: string, password: string) => Promise<void>;
+    onAssignPlan: (candidateId: string, planId: string) => Promise<void>;
 }
 
 const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
     candidates,
+    plans,
     searchQuery,
     setSearchQuery,
     onEdit,
     onDelete,
     onToggleStatus,
     onAdd,
-    onResetPassword
+    onResetPassword,
+    onAssignPlan
 }) => {
     const [currentPage, setCurrentPage] = useState(1);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+    const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [resetPasswordId, setResetPasswordId] = useState<string | null>(null);
+    const [subscriptionCandidateId, setSubscriptionCandidateId] = useState<string | null>(null);
+    const [selectedPlanId, setSelectedPlanId] = useState<string>('');
     const [newPassword, setNewPassword] = useState('');
 
     const [formData, setFormData] = useState({
@@ -42,7 +50,7 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
         province: ''
     });
 
-    const itemsPerPage = 5;
+    const itemsPerPage = 10;
 
     // Filter candidates
     const filteredCandidates = candidates.filter(c => {
@@ -105,6 +113,29 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
         setResetPasswordId(id);
         setNewPassword('');
         setIsPasswordModalOpen(true);
+    };
+
+    const openSubscriptionModal = (id: string) => {
+        setSubscriptionCandidateId(id);
+        setSelectedPlanId('');
+        setIsSubscriptionModalOpen(true);
+    };
+
+    const handleSubscriptionSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!subscriptionCandidateId || !selectedPlanId) return;
+
+        setIsSubmitting(true);
+        try {
+            await onAssignPlan(subscriptionCandidateId, selectedPlanId);
+            alert('پلن با موفقیت فعال شد');
+            setIsSubscriptionModalOpen(false);
+        } catch (error: any) {
+            console.error(error);
+            alert(error.message || 'خطا در فعال‌سازی پلن');
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -174,16 +205,23 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
                     <table className="w-full">
                         <thead className="bg-gray-50/50 text-gray-500 text-xs font-medium">
                             <tr>
+                                <th className="px-6 py-4 text-right w-16">#</th>
                                 <th className="px-6 py-4 text-right">نام کاندید</th>
                                 <th className="px-6 py-4 text-right">اطلاعات بات</th>
                                 <th className="px-6 py-4 text-right">موقعیت</th>
+                                <th className="px-6 py-4 text-right">پلن فعال</th>
                                 <th className="px-6 py-4 text-center">وضعیت</th>
                                 <th className="px-6 py-4 text-center">عملیات</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
-                            {currentCandidates.map((candidate) => (
+                            {currentCandidates.map((candidate, index) => (
                                 <tr key={candidate.id} className="hover:bg-gray-50/80 transition-colors group">
+                                    {/* Row Number */}
+                                    <td className="px-6 py-4 text-gray-400 text-xs font-mono">
+                                        {(currentPage - 1) * itemsPerPage + index + 1}
+                                    </td>
+
                                     {/* Name Column */}
                                     <td className="px-6 py-4">
                                         <div className="flex flex-col">
@@ -225,8 +263,22 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
                                         </div>
                                     </td>
 
+                                    {/* Active Plan Column */}
+                                    <td className="px-6 py-4">
+                                        {(() => {
+                                            const activePlan = plans.find(p => p.id === candidate.active_plan_id);
+                                            return activePlan ? (
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium" style={{ backgroundColor: activePlan.color + '20', color: activePlan.color }}>
+                                                    {activePlan.title}
+                                                </span>
+                                            ) : (
+                                                <span className="text-gray-400 text-xs">-</span>
+                                            );
+                                        })()}
+                                    </td>
+
                                     {/* Status Column */}
-                                    <td className="px-6 py-4 text-center">
+                                    < td className="px-6 py-4 text-center" >
                                         <button
                                             onClick={() => onToggleStatus(candidate.id, candidate.is_active || false)}
                                             className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${candidate.is_active
@@ -241,6 +293,9 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
                                     {/* Actions Column */}
                                     <td className="px-6 py-4 text-center">
                                         <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button onClick={() => openSubscriptionModal(candidate.id)} className="p-2 text-gray-500 hover:text-green-600 hover:bg-green-50 rounded-lg transition" title="مدیریت اشتراک">
+                                                <CreditCard size={16} />
+                                            </button>
                                             <button onClick={() => openPasswordModal(candidate.id)} className="p-2 text-gray-500 hover:text-yellow-600 hover:bg-yellow-50 rounded-lg transition" title="تغییر رمز عبور">
                                                 <Key size={16} />
                                             </button>
@@ -256,17 +311,17 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
                             ))}
                             {currentCandidates.length === 0 && (
                                 <tr>
-                                    <td colSpan={5} className="px-6 py-8 text-center text-gray-400 text-sm">
+                                    <td colSpan={7} className="px-6 py-8 text-center text-gray-400 text-sm">
                                         هیچ کاندیدایی یافت نشد.
                                     </td>
                                 </tr>
                             )}
                         </tbody>
                     </table>
-                </div>
+                </div >
 
                 {/* Pagination */}
-                <div className="p-4 border-t border-gray-100 flex items-center justify-between bg-gray-50/30">
+                < div className="p-4 border-t border-gray-100 flex items-center justify-between bg-gray-50/30" >
                     <div className="text-xs text-gray-500 font-medium">
                         نمایش {filteredCandidates.length > 0 ? startIndex + 1 : 0} تا {endIndex} از {filteredCandidates.length}
                     </div>
@@ -300,173 +355,226 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
                             <ChevronRight size={16} />
                         </button>
                     </div>
-                </div>
-            </div>
+                </div >
+            </div >
 
             {/* Add/Edit Candidate Modal */}
-            {isModalOpen && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 animate-fade-in">
-                    <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-fade-in-up">
-                        <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-                            <h3 className="font-bold text-lg text-gray-800">{editingId ? 'ویرایش کاندیدا' : 'افزودن کاندیدای جدید'}</h3>
-                            <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition">
-                                <X size={24} />
-                            </button>
-                        </div>
-                        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-gray-700">نام و نام خانوادگی <span className="text-red-500">*</span></label>
-                                    <input
-                                        required
-                                        type="text"
-                                        value={formData.name}
-                                        onChange={e => setFormData({ ...formData, name: e.target.value })}
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition"
-                                        placeholder="مثال: دکتر محمدی"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-gray-700">نام کاربری <span className="text-red-500">*</span></label>
-                                    <input
-                                        required
-                                        type="text"
-                                        value={formData.username}
-                                        onChange={e => setFormData({ ...formData, username: e.target.value })}
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
-                                        placeholder="username"
-                                        disabled={!!editingId} // Username usually not editable
-                                    />
-                                </div>
-                                {!editingId && (
+            {
+                isModalOpen && (
+                    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 animate-fade-in">
+                        <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-fade-in-up">
+                            <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                                <h3 className="font-bold text-lg text-gray-800">{editingId ? 'ویرایش کاندیدا' : 'افزودن کاندیدای جدید'}</h3>
+                                <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition">
+                                    <X size={24} />
+                                </button>
+                            </div>
+                            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div className="space-y-2">
-                                        <label className="text-sm font-medium text-gray-700">رمز عبور <span className="text-red-500">*</span></label>
+                                        <label className="text-sm font-medium text-gray-700">نام و نام خانوادگی <span className="text-red-500">*</span></label>
                                         <input
                                             required
-                                            type="password"
-                                            value={formData.password}
-                                            onChange={e => setFormData({ ...formData, password: e.target.value })}
-                                            className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
-                                            placeholder="********"
+                                            type="text"
+                                            value={formData.name}
+                                            onChange={e => setFormData({ ...formData, name: e.target.value })}
+                                            className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition"
+                                            placeholder="مثال: دکتر محمدی"
                                         />
                                     </div>
-                                )}
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-gray-700">شماره تماس</label>
-                                    <input
-                                        type="text"
-                                        value={formData.phone}
-                                        onChange={e => setFormData({ ...formData, phone: e.target.value })}
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
-                                        placeholder="0912..."
-                                    />
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium text-gray-700">نام کاربری <span className="text-red-500">*</span></label>
+                                        <input
+                                            required
+                                            type="text"
+                                            value={formData.username}
+                                            onChange={e => setFormData({ ...formData, username: e.target.value })}
+                                            className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
+                                            placeholder="username"
+                                            disabled={!!editingId} // Username usually not editable
+                                        />
+                                    </div>
+                                    {!editingId && (
+                                        <div className="space-y-2">
+                                            <label className="text-sm font-medium text-gray-700">رمز عبور <span className="text-red-500">*</span></label>
+                                            <input
+                                                required
+                                                type="password"
+                                                value={formData.password}
+                                                onChange={e => setFormData({ ...formData, password: e.target.value })}
+                                                className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
+                                                placeholder="********"
+                                            />
+                                        </div>
+                                    )}
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium text-gray-700">شماره تماس</label>
+                                        <input
+                                            type="text"
+                                            value={formData.phone}
+                                            onChange={e => setFormData({ ...formData, phone: e.target.value })}
+                                            className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
+                                            placeholder="0912..."
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium text-gray-700">نام ربات <span className="text-red-500">*</span></label>
+                                        <input
+                                            required
+                                            type="text"
+                                            value={formData.bot_name}
+                                            onChange={e => setFormData({ ...formData, bot_name: e.target.value })}
+                                            className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
+                                            placeholder="MyBot"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium text-gray-700">توکن ربات <span className="text-red-500">*</span></label>
+                                        <input
+                                            required
+                                            type="text"
+                                            value={formData.bot_token}
+                                            onChange={e => setFormData({ ...formData, bot_token: e.target.value })}
+                                            className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
+                                            placeholder="123456:ABC-DEF..."
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium text-gray-700">استان</label>
+                                        <input
+                                            type="text"
+                                            value={formData.province}
+                                            onChange={e => setFormData({ ...formData, province: e.target.value })}
+                                            className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition"
+                                            placeholder="مثال: تهران"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium text-gray-700">شهر</label>
+                                        <input
+                                            type="text"
+                                            value={formData.city}
+                                            onChange={e => setFormData({ ...formData, city: e.target.value })}
+                                            className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition"
+                                            placeholder="مثال: تهران"
+                                        />
+                                    </div>
                                 </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-gray-700">نام ربات <span className="text-red-500">*</span></label>
-                                    <input
-                                        required
-                                        type="text"
-                                        value={formData.bot_name}
-                                        onChange={e => setFormData({ ...formData, bot_name: e.target.value })}
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
-                                        placeholder="MyBot"
-                                    />
+                                <div className="pt-4 flex items-center justify-end gap-3 border-t border-gray-100 mt-4">
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsModalOpen(false)}
+                                        className="px-6 py-2.5 rounded-xl text-gray-600 hover:bg-gray-100 transition font-medium"
+                                    >
+                                        انصراف
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={isSubmitting}
+                                        className="px-6 py-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition font-medium shadow-lg shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                    >
+                                        {isSubmitting ? 'در حال ثبت...' : (editingId ? 'ویرایش کاندیدا' : 'ثبت کاندیدا')}
+                                    </button>
                                 </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-gray-700">توکن ربات <span className="text-red-500">*</span></label>
-                                    <input
-                                        required
-                                        type="text"
-                                        value={formData.bot_token}
-                                        onChange={e => setFormData({ ...formData, bot_token: e.target.value })}
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
-                                        placeholder="123456:ABC-DEF..."
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-gray-700">استان</label>
-                                    <input
-                                        type="text"
-                                        value={formData.province}
-                                        onChange={e => setFormData({ ...formData, province: e.target.value })}
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition"
-                                        placeholder="مثال: تهران"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-gray-700">شهر</label>
-                                    <input
-                                        type="text"
-                                        value={formData.city}
-                                        onChange={e => setFormData({ ...formData, city: e.target.value })}
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition"
-                                        placeholder="مثال: تهران"
-                                    />
-                                </div>
-                            </div>
-                            <div className="pt-4 flex items-center justify-end gap-3 border-t border-gray-100 mt-4">
-                                <button
-                                    type="button"
-                                    onClick={() => setIsModalOpen(false)}
-                                    className="px-6 py-2.5 rounded-xl text-gray-600 hover:bg-gray-100 transition font-medium"
-                                >
-                                    انصراف
-                                </button>
-                                <button
-                                    type="submit"
-                                    disabled={isSubmitting}
-                                    className="px-6 py-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition font-medium shadow-lg shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                                >
-                                    {isSubmitting ? 'در حال ثبت...' : (editingId ? 'ویرایش کاندیدا' : 'ثبت کاندیدا')}
-                                </button>
-                            </div>
-                        </form>
+                            </form>
+                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Password Reset Modal */}
-            {isPasswordModalOpen && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 animate-fade-in">
-                    <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-fade-in-up">
-                        <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-                            <h3 className="font-bold text-lg text-gray-800">تغییر رمز عبور</h3>
-                            <button onClick={() => setIsPasswordModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition">
-                                <X size={24} />
-                            </button>
+            {
+                isPasswordModalOpen && (
+                    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 animate-fade-in">
+                        <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-fade-in-up">
+                            <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                                <h3 className="font-bold text-lg text-gray-800">تغییر رمز عبور</h3>
+                                <button onClick={() => setIsPasswordModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition">
+                                    <X size={24} />
+                                </button>
+                            </div>
+                            <form onSubmit={handlePasswordSubmit} className="p-6 space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-gray-700">رمز عبور جدید <span className="text-red-500">*</span></label>
+                                    <input
+                                        required
+                                        type="password"
+                                        value={newPassword}
+                                        onChange={e => setNewPassword(e.target.value)}
+                                        className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
+                                        placeholder="********"
+                                    />
+                                </div>
+                                <div className="pt-4 flex items-center justify-end gap-3 border-t border-gray-100 mt-4">
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsPasswordModalOpen(false)}
+                                        className="px-6 py-2.5 rounded-xl text-gray-600 hover:bg-gray-100 transition font-medium"
+                                    >
+                                        انصراف
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={isSubmitting}
+                                        className="px-6 py-2.5 rounded-xl bg-yellow-500 text-white hover:bg-yellow-600 transition font-medium shadow-lg shadow-yellow-500/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                    >
+                                        {isSubmitting ? 'در حال ثبت...' : 'تغییر رمز'}
+                                    </button>
+                                </div>
+                            </form>
                         </div>
-                        <form onSubmit={handlePasswordSubmit} className="p-6 space-y-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-gray-700">رمز عبور جدید <span className="text-red-500">*</span></label>
-                                <input
-                                    required
-                                    type="password"
-                                    value={newPassword}
-                                    onChange={e => setNewPassword(e.target.value)}
-                                    className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition dir-ltr text-left"
-                                    placeholder="********"
-                                />
-                            </div>
-                            <div className="pt-4 flex items-center justify-end gap-3 border-t border-gray-100 mt-4">
-                                <button
-                                    type="button"
-                                    onClick={() => setIsPasswordModalOpen(false)}
-                                    className="px-6 py-2.5 rounded-xl text-gray-600 hover:bg-gray-100 transition font-medium"
-                                >
-                                    انصراف
-                                </button>
-                                <button
-                                    type="submit"
-                                    disabled={isSubmitting}
-                                    className="px-6 py-2.5 rounded-xl bg-yellow-500 text-white hover:bg-yellow-600 transition font-medium shadow-lg shadow-yellow-500/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                                >
-                                    {isSubmitting ? 'در حال ثبت...' : 'تغییر رمز'}
-                                </button>
-                            </div>
-                        </form>
                     </div>
-                </div>
-            )}
+                )
+            }
+            {/* Subscription Modal */}
+            {
+                isSubscriptionModalOpen && (
+                    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 animate-fade-in">
+                        <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-fade-in-up">
+                            <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                                <h3 className="font-bold text-lg text-gray-800">مدیریت اشتراک</h3>
+                                <button onClick={() => setIsSubscriptionModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition">
+                                    <X size={24} />
+                                </button>
+                            </div>
+                            <form onSubmit={handleSubscriptionSubmit} className="p-6 space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-gray-700">انتخاب پلن <span className="text-red-500">*</span></label>
+                                    <select
+                                        required
+                                        value={selectedPlanId}
+                                        onChange={(e) => setSelectedPlanId(e.target.value)}
+                                        className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition outline-none"
+                                    >
+                                        <option value="">انتخاب کنید...</option>
+                                        {plans.map(plan => (
+                                            <option key={plan.id} value={plan.id}>
+                                                {plan.title} - {Number(plan.price).toLocaleString('fa-IR')} تومان
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="flex items-center justify-end gap-3 pt-4">
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsSubscriptionModalOpen(false)}
+                                        className="px-4 py-2.5 rounded-xl text-gray-500 hover:bg-gray-100 transition font-medium"
+                                    >
+                                        انصراف
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={isSubmitting}
+                                        className="px-6 py-2.5 rounded-xl bg-green-600 text-white hover:bg-green-700 transition font-medium shadow-lg shadow-green-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isSubmitting ? 'در حال ثبت...' : 'فعال‌سازی پلن'}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )
+            }
         </>
     );
 };

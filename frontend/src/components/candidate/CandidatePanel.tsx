@@ -41,7 +41,7 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
         if (!token) return;
         const created = await api.createTicket(subject, message, token);
         const newTicket: Ticket = { id: created.id.toString(), userId: candidate.id, userName: candidate.name, subject: created.subject, status: created.status as any, lastUpdate: Date.now(), messages: (created.messages || []).map((m: any) => ({ id: m.id.toString(), senderId: m.sender_role === 'CANDIDATE' ? candidate.id : 'admin', senderRole: m.sender_role, text: m.text, timestamp: new Date(m.created_at).getTime() })) };
-        setTickets(prev => [...prev, newTicket]);
+        setTickets(prev => [newTicket, ...prev]);
         alert('تیکت ایجاد شد');
     };
 
@@ -118,7 +118,7 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                 <div className='flex-1 overflow-hidden p-2 lg:p-4 flex flex-col'>
                     <div className='w-full h-full flex flex-col'>
                         {activeTab === 'INFO_STATS' ? (
-                            <InfoStatsTab candidate={candidate} onUpdate={onUpdate} />
+                            <InfoStatsTab candidate={candidate} onUpdate={onUpdate} plans={plans} announcements={announcements} />
                         ) : activeTab === 'MEDIA' ? (
                             <MediaTab candidate={candidate} onUpdate={onUpdate} />
                         ) : activeTab === 'MY_PLANS' ? (

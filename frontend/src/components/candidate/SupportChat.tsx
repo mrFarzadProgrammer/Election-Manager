@@ -107,14 +107,14 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                                 key={t.id}
                                 onClick={() => { setActiveTicketId(t.id); setIsNewMode(false); }}
                                 className={`p-4 rounded-2xl cursor-pointer transition-all border ${activeTicketId === t.id
-                                        ? 'bg-blue-50 border-blue-100 shadow-sm'
-                                        : 'bg-white border-transparent hover:bg-gray-50 hover:border-gray-100'
+                                    ? 'bg-blue-50 border-blue-100 shadow-sm'
+                                    : 'bg-white border-transparent hover:bg-gray-50 hover:border-gray-100'
                                     }`}
                             >
                                 <div className="flex items-center justify-between mb-2">
                                     <span className={`text-[10px] px-2 py-1 rounded-full font-medium ${t.status === 'OPEN'
-                                            ? 'bg-green-100 text-green-700'
-                                            : 'bg-gray-100 text-gray-600'
+                                        ? 'bg-green-100 text-green-700'
+                                        : 'bg-gray-100 text-gray-600'
                                         }`}>
                                         {t.status === 'OPEN' ? 'پاسخ داده شده' : 'بسته شده'}
                                     </span>
@@ -217,8 +217,8 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                                         <div className={`max-w-[85%] md:max-w-[70%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                                             <div
                                                 className={`px-5 py-3.5 rounded-2xl text-sm leading-relaxed shadow-sm relative group ${isMe
-                                                        ? 'bg-blue-600 text-white rounded-tr-none'
-                                                        : 'bg-white text-gray-800 border border-gray-100 rounded-tl-none'
+                                                    ? 'bg-blue-600 text-white rounded-tr-none'
+                                                    : 'bg-white text-gray-800 border border-gray-100 rounded-tl-none'
                                                     }`}
                                             >
                                                 <p className="whitespace-pre-wrap">{msg.text}</p>

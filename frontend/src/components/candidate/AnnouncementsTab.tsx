@@ -25,23 +25,29 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements }) =>
                         {ann.content}
                     </p>
 
-                    {ann.media_url && (
-                        <div className='mt-4'>
-                            {ann.media_type === 'IMAGE' && (
-                                <img src={ann.media_url} alt={ann.title} className='max-h-80 rounded-xl object-cover shadow-sm w-full md:w-auto' />
-                            )}
-                            {ann.media_type === 'VIDEO' && (
-                                <video src={ann.media_url} controls className='max-h-80 rounded-xl shadow-sm w-full max-w-lg bg-black' />
-                            )}
-                            {ann.media_type === 'VOICE' && (
-                                <audio src={ann.media_url} controls className='w-full max-w-md' />
-                            )}
-                            {(!ann.media_type || ann.media_type === 'FILE') && (
-                                <a href={ann.media_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-blue-600 bg-blue-50 px-4 py-3 rounded-xl hover:bg-blue-100 transition font-medium">
-                                    <FileText size={20} />
-                                    دانلود فایل پیوست
-                                </a>
-                            )}
+                    {ann.attachments && ann.attachments.length > 0 && (
+                        <div className='mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4'>
+                            {ann.attachments.map((att, idx) => (
+                                <div key={idx} className="bg-gray-50 p-2 rounded-xl border border-gray-200 shadow-sm">
+                                    {att.type === 'IMAGE' && (
+                                        <img src={att.url} alt={`attachment-${idx}`} className='w-full h-64 object-cover rounded-lg' />
+                                    )}
+                                    {att.type === 'VIDEO' && (
+                                        <video src={att.url} controls className='w-full h-64 object-cover rounded-lg bg-black' />
+                                    )}
+                                    {att.type === 'VOICE' && (
+                                        <div className="flex items-center justify-center h-24 bg-white rounded-lg">
+                                            <audio src={att.url} controls className='w-full px-2' />
+                                        </div>
+                                    )}
+                                    {(!att.type || att.type === 'FILE') && (
+                                        <a href={att.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-blue-600 bg-blue-50 p-4 rounded-lg hover:bg-blue-100 transition h-full justify-center font-medium">
+                                            <FileText size={24} />
+                                            <span>دانلود فایل</span>
+                                        </a>
+                                    )}
+                                </div>
+                            ))}
                         </div>
                     )}
                 </div>

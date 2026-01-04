@@ -4,7 +4,7 @@ import { Announcement } from '../../types';
 
 interface AnnouncementsTabProps {
     announcements: Announcement[];
-    onSendAnnouncement: (title: string, message: string, file?: File) => Promise<void>;
+    onSendAnnouncement: (title: string, message: string, files: File[]) => Promise<void>;
     onDeleteAnnouncement: (id: string) => void;
     isUploading: boolean;
 }
@@ -12,14 +12,24 @@ interface AnnouncementsTabProps {
 const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements, onSendAnnouncement, onDeleteAnnouncement, isUploading }) => {
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
-    const [file, setFile] = useState<File | null>(null);
+    const [files, setFiles] = useState<File[]>([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleSend = async () => {
         if (!title.trim() || !message.trim()) return;
-        await onSendAnnouncement(title, message, file || undefined);
-        setTitle(''); setMessage(''); setFile(null);
+        await onSendAnnouncement(title, message, files);
+        setTitle(''); setMessage(''); setFiles([]);
         if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files) {
+            setFiles(prev => [...prev, ...Array.from(e.target.files!)]);
+        }
+    };
+
+    const removeFile = (index: number) => {
+        setFiles(prev => prev.filter((_, i) => i !== index));
     };
 
     const getFileIcon = (type: string) => {
@@ -65,10 +75,31 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements, onSe
                         <label className='block text-sm font-medium text-gray-700 mb-1'>پیوست فایل (تصویر، ویدیو، صدا)</label>
                         <div
                             onClick={() => fileInputRef.current?.click()}
-                            className={`border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition ${file ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50'}`}
+                            className={`border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition ${files.length > 0 ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50'}`}
                         >
-                            {file ? (
-                                <div className='flex items-center gap-3 w-full'>
+                            <div className='flex gap-3 text-gray-400 mb-2'>
+                                <ImageIcon size={24} />
+                                <Video size={24} />
+                                <Mic size={24} />
+                            </div>
+                            <p className='text-sm text-gray-500'>برای انتخاب فایل‌ها کلیک کنید</p>
+                            <p className='text-xs text-gray-400 mt-1'>حداکثر حجم: ۵۰ مگابایت</p>
+                        </div>
+                        <input
+                            type='file'
+                            ref={fileInputRef}
+                            className='hidden'
+                            multiple
+                            accept='image/*,video/*,audio/*'
+                            onChange={handleFileChange}
+                        />
+                    </div>
+
+                    {/* Selected Files List */}
+                    {files.length > 0 && (
+                        <div className="space-y-2 max-h-40 overflow-y-auto">
+                            {files.map((file, index) => (
+                                <div key={index} className='flex items-center gap-3 w-full bg-gray-50 p-2 rounded-lg border border-gray-200'>
                                     <div className='p-2 bg-white rounded-lg shadow-sm text-blue-600'>
                                         {getFileIcon(file.type)}
                                     </div>
@@ -77,32 +108,15 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements, onSe
                                         <p className='text-xs text-gray-500'>{(file.size / 1024 / 1024).toFixed(2)} MB</p>
                                     </div>
                                     <button
-                                        onClick={(e) => { e.stopPropagation(); setFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }}
+                                        onClick={() => removeFile(index)}
                                         className='p-1 hover:bg-red-100 text-red-500 rounded-full transition'
                                     >
                                         <X size={18} />
                                     </button>
                                 </div>
-                            ) : (
-                                <>
-                                    <div className='flex gap-3 text-gray-400 mb-2'>
-                                        <ImageIcon size={24} />
-                                        <Video size={24} />
-                                        <Mic size={24} />
-                                    </div>
-                                    <p className='text-sm text-gray-500'>برای انتخاب فایل کلیک کنید</p>
-                                    <p className='text-xs text-gray-400 mt-1'>حداکثر حجم: ۵۰ مگابایت</p>
-                                </>
-                            )}
+                            ))}
                         </div>
-                        <input
-                            type='file'
-                            ref={fileInputRef}
-                            className='hidden'
-                            accept='image/*,video/*,audio/*'
-                            onChange={(e) => setFile(e.target.files?.[0] || null)}
-                        />
-                    </div>
+                    )}
 
                     <button
                         onClick={handleSend}
@@ -158,23 +172,29 @@ const AnnouncementsTab: React.FC<AnnouncementsTabProps> = ({ announcements, onSe
                                 {ann.content}
                             </p>
 
-                            {ann.media_url && (
-                                <div className='mr-12'>
-                                    {ann.media_type === 'IMAGE' && (
-                                        <img src={ann.media_url} alt={ann.title} className='max-h-60 rounded-xl object-cover shadow-sm' />
-                                    )}
-                                    {ann.media_type === 'VIDEO' && (
-                                        <video src={ann.media_url} controls className='max-h-60 rounded-xl shadow-sm w-full max-w-md bg-black' />
-                                    )}
-                                    {ann.media_type === 'VOICE' && (
-                                        <audio src={ann.media_url} controls className='w-full max-w-md' />
-                                    )}
-                                    {(!ann.media_type || ann.media_type === 'FILE') && (
-                                        <a href={ann.media_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-blue-600 bg-blue-50 px-4 py-2 rounded-xl hover:bg-blue-100 transition">
-                                            <FileText size={18} />
-                                            دانلود فایل پیوست
-                                        </a>
-                                    )}
+                            {ann.attachments && ann.attachments.length > 0 && (
+                                <div className='mr-12 grid grid-cols-1 sm:grid-cols-2 gap-4'>
+                                    {ann.attachments.map((att, idx) => (
+                                        <div key={idx} className="bg-white p-2 rounded-xl border border-gray-200 shadow-sm">
+                                            {att.type === 'IMAGE' && (
+                                                <img src={att.url} alt={`attachment-${idx}`} className='w-full h-48 object-cover rounded-lg' />
+                                            )}
+                                            {att.type === 'VIDEO' && (
+                                                <video src={att.url} controls className='w-full h-48 object-cover rounded-lg bg-black' />
+                                            )}
+                                            {att.type === 'VOICE' && (
+                                                <div className="flex items-center justify-center h-20 bg-gray-100 rounded-lg">
+                                                    <audio src={att.url} controls className='w-full px-2' />
+                                                </div>
+                                            )}
+                                            {(!att.type || att.type === 'FILE') && (
+                                                <a href={att.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-blue-600 bg-blue-50 p-4 rounded-lg hover:bg-blue-100 transition h-full justify-center">
+                                                    <FileText size={24} />
+                                                    <span>دانلود فایل</span>
+                                                </a>
+                                            )}
+                                        </div>
+                                    ))}
                                 </div>
                             )}
                         </div>

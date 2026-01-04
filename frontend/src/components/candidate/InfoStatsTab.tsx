@@ -1,19 +1,24 @@
 import React, { useState } from 'react';
-import { CandidateData } from '../../types';
-import { Save, Share, Users, MapPin, Link as LinkIcon, Instagram, Send, ExternalLink, Bot } from 'lucide-react';
+import { CandidateData, Plan, Announcement } from '../../types';
+import { Save, Share, Users, MapPin, Link as LinkIcon, Instagram, Send, ExternalLink, Bot, CreditCard, Megaphone } from 'lucide-react';
 import BotPreview from '../BotPreview';
 import QuotesCarousel from '../QuotesCarousel';
 
 interface InfoStatsTabProps {
     candidate: CandidateData;
     onUpdate: (updatedData: Partial<CandidateData>) => void;
+    plans: Plan[];
+    announcements: Announcement[];
 }
 
-const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate }) => {
+const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate, plans, announcements }) => {
     const [formData, setFormData] = useState<CandidateData>(candidate);
     const [socials, setSocials] = useState<{ telegram_channel?: string; telegram_group?: string; instagram?: string }>(
         candidate.socials || {}
     );
+
+    const activePlan = plans.find(p => p.id.toString() === candidate.active_plan_id?.toString());
+    const recentAnnouncements = announcements.slice(0, 2);
 
     const handleChange = (field: keyof CandidateData, value: string) => {
         setFormData(prev => ({ ...prev, [field]: value }));
@@ -41,9 +46,9 @@ const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate }) => {
                 </div>
 
                 {/* Stats Row */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 shrink-0">
-                    {/* Fan Count (Right Side in RTL) */}
-                    <div className="bg-blue-600 text-white p-3 rounded-2xl shadow-sm flex items-center justify-between relative overflow-hidden h-20">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2 shrink-0">
+                    {/* Fan Count */}
+                    <div className="bg-blue-600 text-white p-3 rounded-2xl shadow-sm flex items-center justify-between relative overflow-hidden h-24">
                         <div className="relative z-10 flex flex-col justify-between h-full">
                             <p className="text-blue-100 text-xs">تعداد هواداران</p>
                             <p className="font-bold text-2xl">{formData.vote_count || 0}</p>
@@ -56,21 +61,41 @@ const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate }) => {
                         </div>
                     </div>
 
-                    {/* Bot Link (Left Side in RTL) */}
-                    <div className="bg-white p-3 rounded-2xl shadow-sm border flex flex-col justify-between h-20 relative">
-                        <p className="text-gray-400 text-[10px] text-right">لینک بات شما</p>
-
-                        <div className="flex items-center gap-2 self-end dir-ltr">
-                            <a
-                                href={`https://t.me/${formData.bot_name}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-gray-400 hover:text-blue-500 transition-colors"
-                            >
-                                <ExternalLink size={18} />
-                            </a>
-                            <span className="font-bold text-base text-gray-800">@{formData.bot_name || 'BotName'}</span>
+                    {/* Active Plan */}
+                    <div className="bg-white p-3 rounded-2xl shadow-sm border flex flex-col justify-between h-24 relative overflow-hidden">
+                        <div className="flex justify-between items-start">
+                            <p className="text-gray-400 text-[10px]">پلن فعال</p>
+                            <CreditCard size={16} className="text-gray-300" />
                         </div>
+                        <div>
+                            <p className="font-bold text-gray-800 text-sm truncate">{activePlan?.title || 'بدون پلن'}</p>
+                            <p className="text-[10px] text-gray-400 mt-1">
+                                {candidate.plan_expires_at ? `انقضا: ${new Date(candidate.plan_expires_at).toLocaleDateString('fa-IR')}` : 'نامحدود'}
+                            </p>
+                        </div>
+                        {activePlan && <div className="absolute bottom-0 left-0 right-0 h-1" style={{ backgroundColor: activePlan.color }}></div>}
+                    </div>
+
+                    {/* Recent Announcement */}
+                    <div className="bg-white p-3 rounded-2xl shadow-sm border flex flex-col justify-between h-24 relative overflow-hidden lg:col-span-2">
+                        <div className="flex justify-between items-center mb-2">
+                            <p className="text-gray-400 text-[10px] flex items-center gap-1">
+                                <Megaphone size={12} />
+                                آخرین اطلاعیه
+                            </p>
+                        </div>
+                        {recentAnnouncements.length > 0 ? (
+                            <div className="space-y-2">
+                                {recentAnnouncements.map(ann => (
+                                    <div key={ann.id} className="flex items-center gap-2 text-xs text-gray-600 truncate">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0"></span>
+                                        <span className="truncate">{ann.title}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="text-xs text-gray-400 text-center">اطلاعیه‌ای نیست</p>
+                        )}
                     </div>
                 </div>
 
