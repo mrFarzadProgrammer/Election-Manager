@@ -183,7 +183,7 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                         ) : (
                             <div className="h-full overflow-y-auto pr-2 custom-scrollbar">
                                 {activeTab === 'PLANS' && <PlansList plans={localPlans} onSelectPlan={(p) => { setSelectedPlan(p); setShowSubscriptionModal(true); }} />}
-                                {activeTab === 'TICKETS' && <SupportChat tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} onTicketOpen={handleTicketOpen} />}
+                                {activeTab === 'TICKETS' && <SupportChat tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} onTicketOpen={handleTicketOpen} readTicketTimes={readTicketTimes} />}
                                 {activeTab === 'NOTIFICATIONS' && <AnnouncementsTab announcements={announcements} />}
                             </div>
                         )}
