@@ -9,9 +9,10 @@ interface SupportChatProps {
     onReplyTicket: (ticketId: string, message: string, attachment?: File) => Promise<void>;
     onTicketOpen?: (ticketId: string) => void;
     isUploading: boolean;
+    readTicketTimes?: { [key: string]: number };
 }
 
-const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onReplyTicket, isUploading, onTicketOpen }) => {
+const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onReplyTicket, isUploading, onTicketOpen, readTicketTimes = {} }) => {
     const [activeTicketId, setActiveTicketId] = useState<string | null>(null);
     const [isNewMode, setIsNewMode] = useState(false);
     const [subject, setSubject] = useState('');
@@ -119,36 +120,43 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                 {/* Ticket List */}
                 <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
                     {filteredTickets.length > 0 ? (
-                        filteredTickets.map(t => (
-                            <div
-                                key={t.id}
-                                onClick={() => { 
-                                    setActiveTicketId(t.id); 
-                                    setIsNewMode(false); 
-                                    onTicketOpen?.(t.id);
-                                }}
-                                className={`p-4 rounded-2xl cursor-pointer transition-all border ${activeTicketId === t.id
-                                    ? 'bg-blue-50 border-blue-100 shadow-sm'
-                                    : 'bg-white border-transparent hover:bg-gray-50 hover:border-gray-100'
-                                    }`}
-                            >
-                                <div className="flex items-center justify-between mb-2">
-                                    <span className={`text-[10px] px-2 py-1 rounded-full font-medium ${t.status === 'ANSWERED'
-                                        ? 'bg-green-100 text-green-700'
-                                        : 'bg-gray-100 text-gray-600'
-                                        }`}>
-                                        {t.status === 'ANSWERED' ? 'پاسخ داده شده' : t.status === 'OPEN' ? 'باز' : 'بسته شده'}
-                                    </span>
-                                    <span className="text-[10px] text-gray-400">{formatTime(t.lastUpdate)}</span>
+                        filteredTickets.map(t => {
+                            const lastRead = readTicketTimes[t.id] || 0;
+                            const isUnread = t.status === 'ANSWERED' && t.lastUpdate > lastRead;
+
+                            return (
+                                <div
+                                    key={t.id}
+                                    onClick={() => {
+                                        setActiveTicketId(t.id);
+                                        setIsNewMode(false);
+                                        onTicketOpen?.(t.id);
+                                    }}
+                                    className={`p-4 rounded-2xl cursor-pointer transition-all border ${activeTicketId === t.id
+                                        ? 'bg-blue-50 border-blue-100 shadow-sm'
+                                        : 'bg-white border-transparent hover:bg-gray-50 hover:border-gray-100'
+                                        }`}
+                                >
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className={`text-[10px] px-2 py-1 rounded-full font-medium ${isUnread
+                                            ? 'bg-red-500 text-white animate-pulse shadow-sm'
+                                            : t.status === 'ANSWERED'
+                                                ? 'bg-green-100 text-green-700'
+                                                : 'bg-gray-100 text-gray-600'
+                                            }`}>
+                                            {isUnread ? 'پیام جدید' : t.status === 'ANSWERED' ? 'پاسخ داده شده' : t.status === 'OPEN' ? 'باز' : 'بسته شده'}
+                                        </span>
+                                        <span className="text-[10px] text-gray-400">{formatTime(t.lastUpdate)}</span>
+                                    </div>
+                                    <h4 className={`font-bold text-sm mb-1 truncate ${activeTicketId === t.id ? 'text-blue-800' : 'text-gray-800'}`}>
+                                        {t.subject}
+                                    </h4>
+                                    <p className="text-xs text-gray-500 truncate">
+                                        {t.messages[t.messages.length - 1]?.text || 'بدون پیام'}
+                                    </p>
                                 </div>
-                                <h4 className={`font-bold text-sm mb-1 truncate ${activeTicketId === t.id ? 'text-blue-800' : 'text-gray-800'}`}>
-                                    {t.subject}
-                                </h4>
-                                <p className="text-xs text-gray-500 truncate">
-                                    {t.messages[t.messages.length - 1]?.text || 'بدون پیام'}
-                                </p>
-                            </div>
-                        ))
+                            );
+                        })
                     ) : (
                         <div className="text-center py-10 text-gray-400">
                             <p className="text-sm">تیکتی یافت نشد</p>
