@@ -84,18 +84,27 @@ const mapPlan = (p: any): Plan => ({
     created_at_jalali: p.created_at_jalali
 });
 
+const ensureUtc = (dateStr: string) => {
+    if (!dateStr) return Date.now();
+    // If it doesn't end in Z and looks like ISO, append Z to treat as UTC
+    if (dateStr.includes('T') && !dateStr.endsWith('Z') && !dateStr.includes('+')) {
+        return new Date(dateStr + 'Z').getTime();
+    }
+    return new Date(dateStr).getTime();
+};
+
 const mapTicket = (t: any): Ticket => ({
     ...t,
     id: String(t.id),
     user_id: String(t.user_id),
     userName: t.userName || t.user_name || t.username,
-    lastUpdate: t.updated_at ? new Date(t.updated_at).getTime() : Date.now(),
+    lastUpdate: t.updated_at ? ensureUtc(t.updated_at) : Date.now(),
     messages: (t.messages || []).map((m: any) => ({
         ...m,
         id: String(m.id),
         senderId: String(m.senderId || m.sender_id || 'unknown'),
         senderRole: m.senderRole || m.sender_role,
-        timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+        timestamp: m.created_at ? ensureUtc(m.created_at) : Date.now(),
         attachmentUrl: m.attachmentUrl || m.attachment_url,
         attachmentType: m.attachmentType || m.attachment_type,
     }))

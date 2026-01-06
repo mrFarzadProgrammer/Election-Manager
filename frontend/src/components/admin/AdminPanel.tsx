@@ -195,9 +195,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
         { id: 'DASHBOARD', label: 'داشبورد', icon: <LayoutDashboard size={20} /> },
         { id: 'CANDIDATES', label: 'کاندیداها', icon: <Users size={20} /> },
         { id: 'PLANS', label: 'پلن‌ها', icon: <CreditCard size={20} /> },
-        { 
-            id: 'TICKETS', 
-            label: 'پشتیبانی', 
+        {
+            id: 'TICKETS',
+            label: 'پشتیبانی',
             icon: (
                 <div className="relative">
                     <MessageSquare size={20} />
@@ -207,7 +207,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
                         </span>
                     )}
                 </div>
-            ) 
+            )
         },
         { id: 'ANNOUNCEMENTS', label: 'اطلاعیه‌ها', icon: <Megaphone size={20} /> },
     ];

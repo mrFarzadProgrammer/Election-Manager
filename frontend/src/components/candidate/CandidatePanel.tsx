@@ -29,6 +29,18 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
     const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
     const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
     const [localPlans, setLocalPlans] = useState<Plan[]>(plans);
+    const [readTicketTimes, setReadTicketTimes] = useState<{ [key: string]: number }>(() => {
+        const saved = localStorage.getItem('read_ticket_times');
+        return saved ? JSON.parse(saved) : {};
+    });
+
+    const handleTicketOpen = (ticketId: string) => {
+        setReadTicketTimes(prev => {
+            const newState = { ...prev, [ticketId]: Date.now() };
+            localStorage.setItem('read_ticket_times', JSON.stringify(newState));
+            return newState;
+        });
+    };
 
     // Sync localPlans with prop when it changes
     useEffect(() => {
@@ -90,6 +102,11 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
     };
 
     const myTickets = tickets.filter(t => t.user_id === candidate.id).sort((a, b) => b.lastUpdate - a.lastUpdate);
+    const unreadCount = myTickets.filter(t => {
+        if (t.status !== 'ANSWERED') return false;
+        const lastRead = readTicketTimes[t.id] || 0;
+        return t.lastUpdate > lastRead;
+    }).length;
 
     return (
         <div className='flex h-full relative bg-gray-50'>
@@ -111,9 +128,9 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                         <button onClick={() => setActiveTab('TICKETS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'TICKETS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
                             <div className="relative">
                                 <MessageSquare size={20} />
-                                {myTickets.filter(t => t.status === 'ANSWERED').length > 0 && (
-                                    <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full">
-                                        {myTickets.filter(t => t.status === 'ANSWERED').length}
+                                {unreadCount > 0 && (
+                                    <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full animate-pulse">
+                                        {unreadCount}
                                     </span>
                                 )}
                             </div>
@@ -166,7 +183,7 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                         ) : (
                             <div className="h-full overflow-y-auto pr-2 custom-scrollbar">
                                 {activeTab === 'PLANS' && <PlansList plans={localPlans} onSelectPlan={(p) => { setSelectedPlan(p); setShowSubscriptionModal(true); }} />}
-                                {activeTab === 'TICKETS' && <SupportChat tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} />}
+                                {activeTab === 'TICKETS' && <SupportChat tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} onTicketOpen={handleTicketOpen} />}
                                 {activeTab === 'NOTIFICATIONS' && <AnnouncementsTab announcements={announcements} />}
                             </div>
                         )}

@@ -7,10 +7,11 @@ interface SupportChatProps {
     tickets: Ticket[];
     onCreateTicket: (subject: string, message: string) => Promise<void>;
     onReplyTicket: (ticketId: string, message: string, attachment?: File) => Promise<void>;
+    onTicketOpen?: (ticketId: string) => void;
     isUploading: boolean;
 }
 
-const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onReplyTicket, isUploading }) => {
+const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onReplyTicket, isUploading, onTicketOpen }) => {
     const [activeTicketId, setActiveTicketId] = useState<string | null>(null);
     const [isNewMode, setIsNewMode] = useState(false);
     const [subject, setSubject] = useState('');
@@ -121,7 +122,11 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                         filteredTickets.map(t => (
                             <div
                                 key={t.id}
-                                onClick={() => { setActiveTicketId(t.id); setIsNewMode(false); }}
+                                onClick={() => { 
+                                    setActiveTicketId(t.id); 
+                                    setIsNewMode(false); 
+                                    onTicketOpen?.(t.id);
+                                }}
                                 className={`p-4 rounded-2xl cursor-pointer transition-all border ${activeTicketId === t.id
                                     ? 'bg-blue-50 border-blue-100 shadow-sm'
                                     : 'bg-white border-transparent hover:bg-gray-50 hover:border-gray-100'
