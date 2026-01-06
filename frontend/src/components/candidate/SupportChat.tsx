@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Ticket } from '../../types';
 import { Plus, Send, Paperclip, Search, ArrowRight, MoreVertical, FileText, Image as ImageIcon, X, ChevronLeft } from 'lucide-react';
-import jalaali from 'jalaali-js';
+import { toJalaali } from 'jalaali-js';
 
 interface SupportChatProps {
     tickets: Ticket[];
@@ -69,10 +69,15 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
     };
 
     const formatTime = (timestamp: number) => {
-        const date = new Date(timestamp);
-        const jDate = jalaali.toJalaali(date);
-        const time = date.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
-        return `${jDate.jy}/${jDate.jm}/${jDate.jd} ${time}`;
+        if (!timestamp || isNaN(timestamp)) return '';
+        try {
+            const date = new Date(timestamp);
+            const jDate = toJalaali(date);
+            const time = date.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
+            return `${jDate.jy}/${jDate.jm}/${jDate.jd} ${time}`;
+        } catch (e) {
+            return '';
+        }
     };
 
     return (

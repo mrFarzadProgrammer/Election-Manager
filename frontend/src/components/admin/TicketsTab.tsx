@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Ticket } from '../../types';
 import { Send, Paperclip, Search, MoreVertical, Image as ImageIcon, Mic, FileText, ArrowRight, MessageSquare } from 'lucide-react';
-import jalaali from 'jalaali-js';
+import { toJalaali } from 'jalaali-js';
 
 interface TicketsTabProps {
     tickets: Ticket[];
@@ -49,10 +49,15 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket
     };
 
     const formatTime = (timestamp: number) => {
-        const date = new Date(timestamp);
-        const jDate = jalaali.toJalaali(date);
-        const time = date.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
-        return `${jDate.jy}/${jDate.jm}/${jDate.jd} ${time}`;
+        if (!timestamp || isNaN(timestamp)) return '';
+        try {
+            const date = new Date(timestamp);
+            const jDate = toJalaali(date);
+            const time = date.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
+            return `${jDate.jy}/${jDate.jm}/${jDate.jd} ${time}`;
+        } catch (e) {
+            return '';
+        }
     };
 
     return (
