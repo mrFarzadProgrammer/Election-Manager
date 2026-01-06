@@ -80,6 +80,13 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
         }
     };
 
+    const getFullUrl = (url?: string) => {
+        if (!url) return undefined;
+        if (url.startsWith('http')) return url;
+        const baseUrl = (typeof process !== "undefined" && (process as any).env?.REACT_APP_API_BASE_URL) || "http://localhost:8000";
+        return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+    };
+
     return (
         <div className="flex h-[calc(100vh-140px)] bg-gray-50 gap-4 p-4 md:p-0 overflow-hidden">
             {/* Sidebar (Right Side) */}
@@ -220,9 +227,11 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                         {/* Messages Area */}
                         <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-gray-50/50">
                             {(activeTicket.messages || []).map((msg, idx) => {
-                                const isMe = msg.senderRole === 'CANDIDATE';
+                                const isMe = (msg.senderRole || '').toUpperCase() === 'CANDIDATE';
+                                const fileUrl = getFullUrl(msg.attachmentUrl);
+
                                 return (
-                                    <div key={idx} className={`flex ${isMe ? 'justify-start' : 'justify-end'}`} dir="ltr">
+                                    <div key={idx} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`} dir="ltr">
                                         <div className={`max-w-[85%] md:max-w-[70%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                                             <div
                                                 className={`px-5 py-3.5 rounded-2xl text-sm leading-relaxed shadow-sm relative group text-right ${isMe
@@ -232,18 +241,26 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                                                 dir="rtl"
                                             >
                                                 <p className="whitespace-pre-wrap">{msg.text}</p>
-                                                {msg.attachmentUrl && (
-                                                    <a
-                                                        href={msg.attachmentUrl}
-                                                        target="_blank"
-                                                        rel="noreferrer"
-                                                        className={`flex items-center gap-2 mt-3 p-2 rounded-lg ${isMe ? 'bg-blue-700/50' : 'bg-gray-50 border border-gray-200'}`}
-                                                    >
-                                                        <div className={`p-1.5 rounded-md ${isMe ? 'bg-white/20' : 'bg-white shadow-sm'}`}>
-                                                            <Paperclip size={16} />
-                                                        </div>
-                                                        <span className="text-xs opacity-90">دانلود فایل پیوست</span>
-                                                    </a>
+                                                {fileUrl && (
+                                                    <div className="mt-3">
+                                                         {msg.attachmentType === 'IMAGE' ? (
+                                                            <a href={fileUrl} target="_blank" rel="noreferrer">
+                                                                <img src={fileUrl} alt="attachment" className="max-w-full h-auto max-h-48 object-cover rounded-lg" />
+                                                            </a>
+                                                        ) : (
+                                                            <a
+                                                                href={fileUrl}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className={`flex items-center gap-2 p-2 rounded-lg ${isMe ? 'bg-blue-700/50' : 'bg-gray-50 border border-gray-200'}`}
+                                                            >
+                                                                <div className={`p-1.5 rounded-md ${isMe ? 'bg-white/20' : 'bg-white shadow-sm'}`}>
+                                                                    <Paperclip size={16} />
+                                                                </div>
+                                                                <span className="text-xs opacity-90">دانلود فایل پیوست</span>
+                                                            </a>
+                                                        )}
+                                                    </div>
                                                 )}
                                                 <span className={`text-[10px] absolute bottom-1 ${isMe ? 'left-2 text-blue-100' : 'right-2 text-gray-400'} opacity-0 group-hover:opacity-100 transition-opacity`}>
                                                     {formatTime(msg.timestamp)}

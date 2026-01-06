@@ -60,6 +60,13 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket
         }
     };
 
+    const getFullUrl = (url?: string) => {
+        if (!url) return undefined;
+        if (url.startsWith('http')) return url;
+        const baseUrl = (typeof process !== "undefined" && (process as any).env?.REACT_APP_API_BASE_URL) || "http://localhost:8000";
+        return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+    };
+
     return (
         <div className='flex h-[calc(100vh-140px)] bg-white rounded-3xl shadow-sm border overflow-hidden'>
             {/* Right Sidebar - Ticket List */}
@@ -143,26 +150,30 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket
                         {/* Messages Area */}
                         <div className='flex-1 overflow-y-auto p-4 space-y-6 bg-[#f8f9fa]'>
                             {(activeTicket.messages || []).map((msg, idx) => {
-                                const isAdmin = msg.senderRole === 'ADMIN';
+                                const isAdmin = (msg.senderRole || '').toUpperCase() === 'ADMIN';
+                                const fileUrl = getFullUrl(msg.attachmentUrl);
+                                
                                 return (
-                                    <div key={idx} className={`flex ${isAdmin ? 'justify-start' : 'justify-end'}`} dir="ltr">
+                                    <div key={idx} className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`} dir="ltr">
                                         <div className={`max-w-[75%] md:max-w-[60%] flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}>
                                             <div
                                                 className={`p-4 rounded-2xl shadow-sm relative group text-right ${isAdmin
-                                                    ? 'bg-blue-600 text-white rounded-br-none'
-                                                    : 'bg-white text-gray-800 border border-gray-100 rounded-bl-none'
+                                                    ? 'bg-blue-600 text-white rounded-tr-none'
+                                                    : 'bg-white text-gray-800 border border-gray-100 rounded-tl-none'
                                                     }`}
                                                 dir="rtl"
                                             >
                                                 {msg.text && <p className='text-sm leading-relaxed whitespace-pre-wrap'>{msg.text}</p>}
 
-                                                {msg.attachmentUrl && (
+                                                {fileUrl && (
                                                     <div className={`mt-2 rounded-xl overflow-hidden ${isAdmin ? 'bg-white/10' : 'bg-gray-50 border'}`}>
                                                         {msg.attachmentType === 'IMAGE' ? (
-                                                            <img src={msg.attachmentUrl} alt="attachment" className="max-w-full h-auto max-h-60 object-cover" />
+                                                            <a href={fileUrl} target='_blank' rel="noreferrer">
+                                                                <img src={fileUrl} alt="attachment" className="max-w-full h-auto max-h-60 object-cover" />
+                                                            </a>
                                                         ) : (
                                                             <a
-                                                                href={msg.attachmentUrl}
+                                                                href={fileUrl}
                                                                 target='_blank'
                                                                 rel="noreferrer"
                                                                 className={`flex items-center gap-3 p-3 text-sm ${isAdmin ? 'text-white hover:bg-white/20' : 'text-blue-600 hover:bg-gray-100'} transition`}
