@@ -40,7 +40,21 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
         const token = localStorage.getItem('access_token');
         if (!token) return;
         const created = await api.createTicket(subject, message, token);
-        const newTicket: Ticket = { id: created.id.toString(), userId: candidate.id, userName: candidate.name, subject: created.subject, status: created.status as any, lastUpdate: Date.now(), messages: (created.messages || []).map((m: any) => ({ id: m.id.toString(), senderId: m.sender_role === 'CANDIDATE' ? candidate.id : 'admin', senderRole: m.sender_role, text: m.text, timestamp: new Date(m.created_at).getTime() })) };
+        const newTicket: Ticket = {
+            id: created.id.toString(),
+            user_id: candidate.id,
+            userName: candidate.name,
+            subject: created.subject,
+            status: created.status as any,
+            lastUpdate: Date.now(),
+            messages: (created.messages || []).map((m: any) => ({
+                id: m.id.toString(),
+                senderId: m.sender_role === 'CANDIDATE' ? candidate.id : 'admin',
+                senderRole: m.sender_role,
+                text: m.text,
+                timestamp: new Date(m.created_at).getTime()
+            }))
+        };
         setTickets(prev => [newTicket, ...prev]);
         alert('تیکت ایجاد شد');
     };
@@ -62,7 +76,7 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
         } finally { setIsUploading(false); }
     };
 
-    const myTickets = tickets.filter(t => t.userId === candidate.id).sort((a, b) => b.lastUpdate - a.lastUpdate);
+    const myTickets = tickets.filter(t => t.user_id === candidate.id).sort((a, b) => b.lastUpdate - a.lastUpdate);
 
     return (
         <div className='flex h-full relative bg-gray-50'>
@@ -81,7 +95,18 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                         <button onClick={() => setActiveTab('MY_PLANS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'MY_PLANS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><List size={20} /> برنامه‌های من</button>
                         <button onClick={() => setActiveTab('BOT_SETTINGS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'BOT_SETTINGS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Settings size={20} /> تنظیمات بات</button>
                         <button onClick={() => setActiveTab('PLANS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PLANS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><CreditCard size={20} /> لیست پلن‌ها</button>
-                        <button onClick={() => setActiveTab('TICKETS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'TICKETS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><MessageSquare size={20} /> پشتیبانی</button>
+                        <button onClick={() => setActiveTab('TICKETS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'TICKETS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                            <div className="relative">
+                                <MessageSquare size={20} />
+                                {myTickets.filter(t => t.status === 'ANSWERED').length > 0 && (
+                                    <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full">
+                                        {myTickets.filter(t => t.status === 'ANSWERED').length}
+                                    </span>
+                                )}
+                            </div>
+                            پشتیبانی
+                        </button>
+                        <button onClick={() => setActiveTab('NOTIFICATIONS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'NOTIFICATIONS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Bell size={20} /> اطلاعیه‌ها</button>
                     </nav>
                     <div className="px-4 mb-4 mt-auto">
                         <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">

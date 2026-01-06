@@ -89,10 +89,12 @@ const mapTicket = (t: any): Ticket => ({
     id: String(t.id),
     user_id: String(t.user_id),
     userName: t.userName || t.user_name || t.username,
+    lastUpdate: t.updated_at ? new Date(t.updated_at).getTime() : Date.now(),
     messages: (t.messages || []).map((m: any) => ({
         ...m,
         id: String(m.id),
         senderId: String(m.senderId || m.sender_id || 'unknown'),
+        timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
     }))
 });
 
@@ -185,7 +187,7 @@ export const api = {
     },
 
     updateCandidateStatus: async (id: string, isActive: boolean, token: string): Promise<Candidate> => {
-        const data = await request<any>(`/api/candidates/${id}/status`, {
+        const data = await request<any>(`/api/candidates/${id}`, {
             method: "PUT",
             headers: {
                 "Content-Type": "application/json",

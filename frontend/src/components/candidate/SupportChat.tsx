@@ -213,13 +213,14 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                             {(activeTicket.messages || []).map((msg, idx) => {
                                 const isMe = msg.senderRole === 'CANDIDATE';
                                 return (
-                                    <div key={idx} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                                    <div key={idx} className={`flex ${isMe ? 'justify-start' : 'justify-end'}`} dir="ltr">
                                         <div className={`max-w-[85%] md:max-w-[70%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                                             <div
-                                                className={`px-5 py-3.5 rounded-2xl text-sm leading-relaxed shadow-sm relative group ${isMe
+                                                className={`px-5 py-3.5 rounded-2xl text-sm leading-relaxed shadow-sm relative group text-right ${isMe
                                                     ? 'bg-blue-600 text-white rounded-tr-none'
                                                     : 'bg-white text-gray-800 border border-gray-100 rounded-tl-none'
                                                     }`}
+                                                dir="rtl"
                                             >
                                                 <p className="whitespace-pre-wrap">{msg.text}</p>
                                                 {msg.attachmentUrl && (

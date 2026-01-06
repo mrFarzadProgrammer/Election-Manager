@@ -136,13 +136,14 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket
                             {(activeTicket.messages || []).map((msg, idx) => {
                                 const isAdmin = msg.senderRole === 'ADMIN';
                                 return (
-                                    <div key={idx} className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`}>
+                                    <div key={idx} className={`flex ${isAdmin ? 'justify-start' : 'justify-end'}`} dir="ltr">
                                         <div className={`max-w-[75%] md:max-w-[60%] flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}>
                                             <div
-                                                className={`p-4 rounded-2xl shadow-sm relative group ${isAdmin
+                                                className={`p-4 rounded-2xl shadow-sm relative group text-right ${isAdmin
                                                     ? 'bg-blue-600 text-white rounded-br-none'
                                                     : 'bg-white text-gray-800 border border-gray-100 rounded-bl-none'
                                                     }`}
+                                                dir="rtl"
                                             >
                                                 {msg.text && <p className='text-sm leading-relaxed whitespace-pre-wrap'>{msg.text}</p>}
 
