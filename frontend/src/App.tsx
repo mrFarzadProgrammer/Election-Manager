@@ -66,7 +66,9 @@ function App() {
     };
 
     if (!loading && user) {
-      fetchData();
+      fetchData(); // Initial fetch
+      const intervalId = setInterval(fetchData, 5000); // Poll every 5 seconds
+      return () => clearInterval(intervalId);
     }
   }, [user, token, loading]);
 
