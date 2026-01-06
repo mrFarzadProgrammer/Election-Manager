@@ -99,8 +99,8 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket
                         >
                             <div className='flex justify-between items-start mb-1'>
                                 <h4 className='font-bold text-gray-800 truncate max-w-[140px]'>{ticket.userName || 'کاربر ناشناس'}</h4>
-                                <span className={`text-[10px] px-2 py-0.5 rounded-full ${ticket.status === 'OPEN' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
-                                    {ticket.status === 'OPEN' ? 'باز' : 'بسته'}
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full ${ticket.status === 'OPEN' ? 'bg-red-500 text-white shadow-sm animate-pulse' : 'bg-gray-100 text-gray-500'}`}>
+                                    {ticket.status === 'OPEN' ? 'پیام جدید' : 'بسته'}
                                 </span>
                             </div>
                             <p className='text-sm text-gray-600 font-medium mb-1 truncate'>{ticket.subject}</p>

@@ -195,7 +195,20 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
         { id: 'DASHBOARD', label: 'داشبورد', icon: <LayoutDashboard size={20} /> },
         { id: 'CANDIDATES', label: 'کاندیداها', icon: <Users size={20} /> },
         { id: 'PLANS', label: 'پلن‌ها', icon: <CreditCard size={20} /> },
-        { id: 'TICKETS', label: 'پشتیبانی', icon: <MessageSquare size={20} /> },
+        { 
+            id: 'TICKETS', 
+            label: 'پشتیبانی', 
+            icon: (
+                <div className="relative">
+                    <MessageSquare size={20} />
+                    {tickets.filter(t => t.status === 'OPEN').length > 0 && (
+                        <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full animate-pulse border-2 border-white">
+                            {tickets.filter(t => t.status === 'OPEN').length}
+                        </span>
+                    )}
+                </div>
+            ) 
+        },
         { id: 'ANNOUNCEMENTS', label: 'اطلاعیه‌ها', icon: <Megaphone size={20} /> },
     ];
 
