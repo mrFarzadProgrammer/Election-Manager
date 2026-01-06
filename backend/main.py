@@ -47,11 +47,15 @@ app.add_middleware(
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
-    file_location = f"{UPLOAD_DIR}/{file.filename}"
+    # Sanitize filename
+    filename = file.filename.replace(" ", "_")
+    file_location = f"{UPLOAD_DIR}/{filename}"
+    
     with open(file_location, "wb+") as buffer:
         shutil.copyfileobj(file.file, buffer)
+    
     # Return URL relative to server root
-    return {"url": f"http://localhost:8000/uploads/{file.filename}", "filename": file.filename}
+    return {"url": f"http://localhost:8000/uploads/{filename}", "filename": filename}
 
 # ============================================================================
 # ✅ HELPERS برای خطاهای Duplicate Field

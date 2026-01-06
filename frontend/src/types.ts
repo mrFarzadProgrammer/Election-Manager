@@ -62,6 +62,7 @@ export interface TicketMessage {
     text: string;
     timestamp: number;
     attachmentUrl?: string;
+    attachmentType?: 'IMAGE' | 'VIDEO' | 'VOICE' | 'FILE';
 }
 
 export interface Announcement {

@@ -177,6 +177,7 @@ class Ticket(BaseModel):
     created_at: datetime
     updated_at: datetime
     messages: List[TicketMessage] = []
+    user_name: Optional[str] = None
 
     class Config:
         from_attributes = True

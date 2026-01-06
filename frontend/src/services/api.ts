@@ -94,7 +94,10 @@ const mapTicket = (t: any): Ticket => ({
         ...m,
         id: String(m.id),
         senderId: String(m.senderId || m.sender_id || 'unknown'),
+        senderRole: m.senderRole || m.sender_role,
         timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+        attachmentUrl: m.attachmentUrl || m.attachment_url,
+        attachmentType: m.attachmentType || m.attachment_type,
     }))
 });
 

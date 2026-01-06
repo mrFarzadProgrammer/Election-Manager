@@ -78,6 +78,10 @@ class Ticket(Base):
     user = relationship("User", back_populates="tickets")
     messages = relationship("TicketMessage", back_populates="ticket", cascade="all, delete-orphan")
 
+    @property
+    def user_name(self):
+        return self.user.username if self.user else None
+
 class TicketMessage(Base):
     __tablename__ = "ticket_messages"
 

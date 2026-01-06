@@ -63,7 +63,7 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket
     const getFullUrl = (url?: string) => {
         if (!url) return undefined;
         if (url.startsWith('http')) return url;
-        const baseUrl = (typeof process !== "undefined" && (process as any).env?.REACT_APP_API_BASE_URL) || "http://localhost:8000";
+        const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
         return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
     };
 
@@ -152,23 +152,27 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket
                             {(activeTicket.messages || []).map((msg, idx) => {
                                 const isAdmin = (msg.senderRole || '').toUpperCase() === 'ADMIN';
                                 const fileUrl = getFullUrl(msg.attachmentUrl);
-                                
+
                                 return (
                                     <div key={idx} className={`flex ${isAdmin ? 'justify-end' : 'justify-start'}`} dir="ltr">
                                         <div className={`max-w-[75%] md:max-w-[60%] flex flex-col ${isAdmin ? 'items-end' : 'items-start'}`}>
                                             <div
-                                                className={`p-4 rounded-2xl shadow-sm relative group text-right ${isAdmin
-                                                    ? 'bg-blue-600 text-white rounded-tr-none'
-                                                    : 'bg-white text-gray-800 border border-gray-100 rounded-tl-none'
+                                                className={`p-3 rounded-2xl shadow-sm relative group text-right ${isAdmin
+                                                    ? 'bg-blue-600 text-white rounded-br-none'
+                                                    : 'bg-white text-gray-800 border border-gray-100 rounded-bl-none'
                                                     }`}
                                                 dir="rtl"
                                             >
-                                                {msg.text && <p className='text-sm leading-relaxed whitespace-pre-wrap'>{msg.text}</p>}
+                                                {msg.text && (
+                                                    <div className="mb-1">
+                                                        <p className='text-sm leading-relaxed whitespace-pre-wrap break-words'>{msg.text}</p>
+                                                    </div>
+                                                )}
 
                                                 {fileUrl && (
                                                     <div className={`mt-2 rounded-xl overflow-hidden ${isAdmin ? 'bg-white/10' : 'bg-gray-50 border'}`}>
                                                         {msg.attachmentType === 'IMAGE' ? (
-                                                            <a href={fileUrl} target='_blank' rel="noreferrer">
+                                                            <a href={fileUrl} target='_blank' rel="noreferrer" className="block">
                                                                 <img src={fileUrl} alt="attachment" className="max-w-full h-auto max-h-60 object-cover" />
                                                             </a>
                                                         ) : (
@@ -190,9 +194,9 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket
                                                     </div>
                                                 )}
 
-                                                <span className={`text-[10px] absolute bottom-1 ${isAdmin ? 'left-2 text-blue-100' : 'right-2 text-gray-400'}`}>
-                                                    {formatTime(msg.timestamp)}
-                                                </span>
+                                                <div className={`flex items-center justify-end gap-1 mt-1 ${isAdmin ? 'text-blue-100' : 'text-gray-400'}`}>
+                                                    <span className="text-[10px]">{formatTime(msg.timestamp)}</span>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>

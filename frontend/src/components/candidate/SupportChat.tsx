@@ -83,7 +83,7 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
     const getFullUrl = (url?: string) => {
         if (!url) return undefined;
         if (url.startsWith('http')) return url;
-        const baseUrl = (typeof process !== "undefined" && (process as any).env?.REACT_APP_API_BASE_URL) || "http://localhost:8000";
+        const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
         return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
     };
 
@@ -234,17 +234,20 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                                     <div key={idx} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`} dir="ltr">
                                         <div className={`max-w-[85%] md:max-w-[70%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                                             <div
-                                                className={`px-5 py-3.5 rounded-2xl text-sm leading-relaxed shadow-sm relative group text-right ${isMe
-                                                    ? 'bg-blue-600 text-white rounded-tr-none'
-                                                    : 'bg-white text-gray-800 border border-gray-100 rounded-tl-none'
+                                                className={`px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm relative group text-right ${isMe
+                                                    ? 'bg-blue-600 text-white rounded-br-none'
+                                                    : 'bg-white text-gray-800 border border-gray-100 rounded-bl-none'
                                                     }`}
                                                 dir="rtl"
                                             >
-                                                <p className="whitespace-pre-wrap">{msg.text}</p>
+                                                <div className="mb-1">
+                                                    <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                                                </div>
+
                                                 {fileUrl && (
-                                                    <div className="mt-3">
-                                                         {msg.attachmentType === 'IMAGE' ? (
-                                                            <a href={fileUrl} target="_blank" rel="noreferrer">
+                                                    <div className="my-2">
+                                                        {msg.attachmentType === 'IMAGE' ? (
+                                                            <a href={fileUrl} target="_blank" rel="noreferrer" className="block">
                                                                 <img src={fileUrl} alt="attachment" className="max-w-full h-auto max-h-48 object-cover rounded-lg" />
                                                             </a>
                                                         ) : (
@@ -252,23 +255,21 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                                                                 href={fileUrl}
                                                                 target="_blank"
                                                                 rel="noreferrer"
-                                                                className={`flex items-center gap-2 p-2 rounded-lg ${isMe ? 'bg-blue-700/50' : 'bg-gray-50 border border-gray-200'}`}
+                                                                className={`flex items-center gap-2 p-2 rounded-lg ${isMe ? 'bg-blue-700/50 hover:bg-blue-700' : 'bg-gray-50 border border-gray-200 hover:bg-gray-100'} transition-colors`}
                                                             >
                                                                 <div className={`p-1.5 rounded-md ${isMe ? 'bg-white/20' : 'bg-white shadow-sm'}`}>
                                                                     <Paperclip size={16} />
                                                                 </div>
-                                                                <span className="text-xs opacity-90">دانلود فایل پیوست</span>
+                                                                <span className="text-xs opacity-90 truncate max-w-[150px]">دانلود فایل پیوست</span>
                                                             </a>
                                                         )}
                                                     </div>
                                                 )}
-                                                <span className={`text-[10px] absolute bottom-1 ${isMe ? 'left-2 text-blue-100' : 'right-2 text-gray-400'} opacity-0 group-hover:opacity-100 transition-opacity`}>
-                                                    {formatTime(msg.timestamp)}
-                                                </span>
+
+                                                <div className={`flex items-center justify-end gap-1 mt-1 ${isMe ? 'text-blue-100' : 'text-gray-400'}`}>
+                                                    <span className="text-[10px]">{formatTime(msg.timestamp)}</span>
+                                                </div>
                                             </div>
-                                            <span className="text-[10px] text-gray-400 mt-1 px-1">
-                                                {formatTime(msg.timestamp)}
-                                            </span>
                                         </div>
                                     </div>
                                 );
