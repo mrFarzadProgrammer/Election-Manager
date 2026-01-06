@@ -26,6 +26,31 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
     const [announcements, setAnnouncements] = useState<Announcement[]>([]);
     const [isUploading, setIsUploading] = useState(false);
 
+    // Read receipts state
+    const [readTicketTimes, setReadTicketTimes] = useState<{ [key: string]: number }>(() => {
+        const saved = localStorage.getItem('admin_read_ticket_times');
+        return saved ? JSON.parse(saved) : {};
+    });
+
+    const handleTicketOpen = (ticketId: string) => {
+        const ticket = tickets.find(t => t.id === ticketId);
+        const ticketTime = ticket ? ticket.lastUpdate : 0;
+
+        setReadTicketTimes(prev => {
+            const effectiveReadTime = Math.max(Date.now(), ticketTime + 1);
+            const newState = { ...prev, [ticketId]: effectiveReadTime };
+            localStorage.setItem('admin_read_ticket_times', JSON.stringify(newState));
+            return newState;
+        });
+    };
+
+    // Calculate unread tickets for notification badge
+    const unreadCount = tickets.filter(t => {
+        if (t.status !== 'OPEN') return false;
+        const lastRead = readTicketTimes[t.id] || 0;
+        return t.lastUpdate > lastRead;
+    }).length;
+
     useEffect(() => {
         api.getAnnouncements().then(setAnnouncements).catch(console.error);
     }, []);
@@ -201,9 +226,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
             icon: (
                 <div className="relative">
                     <MessageSquare size={20} />
-                    {tickets.filter(t => t.status === 'OPEN').length > 0 && (
+                    {unreadCount > 0 && (
                         <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full animate-pulse border-2 border-white">
-                            {tickets.filter(t => t.status === 'OPEN').length}
+                            {unreadCount}
                         </span>
                     )}
                 </div>
@@ -265,7 +290,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
                         {activeTab === 'DASHBOARD' && <DashboardTab candidates={candidates} plans={plans} tickets={tickets} onTabChange={setActiveTab} />}
                         {activeTab === 'CANDIDATES' && <CandidatesManagement candidates={candidates} plans={plans} searchQuery={searchQuery} setSearchQuery={setSearchQuery} onEdit={handleEditCandidate} onDelete={handleDeleteCandidate} onToggleStatus={handleToggleStatus} onAdd={handleAddCandidate} onResetPassword={handleResetPassword} onAssignPlan={handleAssignPlan} />}
                         {activeTab === 'PLANS' && <PlansTab plans={plans} onSavePlan={handleSavePlan} onDeletePlan={handleDeletePlan} />}
-                        {activeTab === 'TICKETS' && <TicketsTab tickets={tickets} onReply={handleTicketReply} onCloseTicket={() => { }} isUploading={isUploading} />}
+                        {activeTab === 'TICKETS' && <TicketsTab tickets={tickets} onReply={handleTicketReply} onCloseTicket={() => { }} isUploading={isUploading} onTicketOpen={handleTicketOpen} readTicketTimes={readTicketTimes} />}
                         {activeTab === 'ANNOUNCEMENTS' && <AnnouncementsTab announcements={announcements} onSendAnnouncement={handleSendAnnouncement} onDeleteAnnouncement={() => { }} isUploading={isUploading} />}
                     </div>
                 </div>

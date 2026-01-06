@@ -35,8 +35,16 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
     });
 
     const handleTicketOpen = (ticketId: string) => {
+        // Find the ticket to get its lastUpdate time
+        const ticket = tickets.find(t => t.id === ticketId);
+        const ticketTime = ticket ? ticket.lastUpdate : 0;
+
         setReadTicketTimes(prev => {
-            const newState = { ...prev, [ticketId]: Date.now() };
+            // Ensure read time is at least 1ms after the ticket's last update
+            // This prevents issues where server time > client time
+            const effectiveReadTime = Math.max(Date.now(), ticketTime + 1);
+
+            const newState = { ...prev, [ticketId]: effectiveReadTime };
             localStorage.setItem('read_ticket_times', JSON.stringify(newState));
             return newState;
         });

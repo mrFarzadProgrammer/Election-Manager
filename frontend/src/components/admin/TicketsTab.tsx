@@ -8,9 +8,11 @@ interface TicketsTabProps {
     onReply: (ticketId: string, message: string, attachment?: File) => Promise<void>;
     onCloseTicket: (ticketId: string) => void;
     isUploading: boolean;
+    onTicketOpen?: (ticketId: string) => void;
+    readTicketTimes?: { [key: string]: number };
 }
 
-const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket, isUploading }) => {
+const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket, isUploading, onTicketOpen, readTicketTimes = {} }) => {
     const [activeTicketId, setActiveTicketId] = useState<string | null>(null);
     const [replyMsg, setReplyMsg] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
@@ -91,29 +93,41 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket
                 </div>
 
                 <div className='flex-1 overflow-y-auto'>
-                    {filteredTickets.map(ticket => (
-                        <div
-                            key={ticket.id}
-                            onClick={() => setActiveTicketId(ticket.id)}
-                            className={`p-4 border-b cursor-pointer hover:bg-gray-50 transition relative group ${activeTicketId === ticket.id ? 'bg-blue-50/50' : ''}`}
-                        >
-                            <div className='flex justify-between items-start mb-1'>
-                                <h4 className='font-bold text-gray-800 truncate max-w-[140px]'>{ticket.userName || 'کاربر ناشناس'}</h4>
-                                <span className={`text-[10px] px-2 py-0.5 rounded-full ${ticket.status === 'OPEN' ? 'bg-red-500 text-white shadow-sm animate-pulse' : 'bg-gray-100 text-gray-500'}`}>
-                                    {ticket.status === 'OPEN' ? 'پیام جدید' : 'بسته'}
-                                </span>
+                    {filteredTickets.map(ticket => {
+                        const lastRead = readTicketTimes[ticket.id] || 0;
+                        const isUnread = ticket.status === 'OPEN' && ticket.lastUpdate > lastRead;
+                        return (
+                            <div
+                                key={ticket.id}
+                                onClick={() => {
+                                    setActiveTicketId(ticket.id);
+                                    onTicketOpen?.(ticket.id);
+                                }}
+                                className={`p-4 border-b cursor-pointer hover:bg-gray-50 transition relative group ${activeTicketId === ticket.id ? 'bg-blue-50/50' : ''}`}
+                            >
+                                <div className='flex justify-between items-start mb-1'>
+                                    <h4 className='font-bold text-gray-800 truncate max-w-[140px]'>{ticket.userName || 'کاربر ناشناس'}</h4>
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${isUnread
+                                        ? 'bg-red-500 text-white shadow-sm animate-pulse'
+                                        : ticket.status === 'OPEN'
+                                            ? 'bg-green-100 text-green-600'
+                                            : 'bg-gray-100 text-gray-500'
+                                        }`}>
+                                        {isUnread ? 'پیام جدید' : ticket.status === 'OPEN' ? 'باز' : 'بسته'}
+                                    </span>
+                                </div>
+                                <p className='text-sm text-gray-600 font-medium mb-1 truncate'>{ticket.subject}</p>
+                                <p className='text-xs text-gray-400 truncate'>
+                                    {(ticket.messages && ticket.messages.length > 0)
+                                        ? (ticket.messages[ticket.messages.length - 1]?.text || 'بدون متن')
+                                        : 'بدون پیام'}
+                                </p>
+                                {activeTicketId === ticket.id && (
+                                    <div className='absolute left-0 top-0 bottom-0 w-1 bg-blue-600 rounded-r-full'></div>
+                                )}
                             </div>
-                            <p className='text-sm text-gray-600 font-medium mb-1 truncate'>{ticket.subject}</p>
-                            <p className='text-xs text-gray-400 truncate'>
-                                {(ticket.messages && ticket.messages.length > 0)
-                                    ? (ticket.messages[ticket.messages.length - 1]?.text || 'بدون متن')
-                                    : 'بدون پیام'}
-                            </p>
-                            {activeTicketId === ticket.id && (
-                                <div className='absolute left-0 top-0 bottom-0 w-1 bg-blue-600 rounded-r-full'></div>
-                            )}
-                        </div>
-                    ))}
+                        );
+                    })}
                     {filteredTickets.length === 0 && (
                         <div className='p-8 text-center text-gray-400 text-sm'>
                             پیامی یافت نشد
