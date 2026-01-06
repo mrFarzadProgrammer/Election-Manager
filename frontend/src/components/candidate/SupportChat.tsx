@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Ticket } from '../../types';
 import { Plus, Send, Paperclip, Search, ArrowRight, MoreVertical, FileText, Image as ImageIcon, X, ChevronLeft } from 'lucide-react';
+import jalaali from 'jalaali-js';
 
 interface SupportChatProps {
     tickets: Ticket[];
@@ -68,7 +69,10 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
     };
 
     const formatTime = (timestamp: number) => {
-        return new Date(timestamp).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
+        const date = new Date(timestamp);
+        const jDate = jalaali.toJalaali(date);
+        const time = date.toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
+        return `${jDate.jy}/${jDate.jm}/${jDate.jd} ${time}`;
     };
 
     return (
@@ -112,11 +116,11 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                                     }`}
                             >
                                 <div className="flex items-center justify-between mb-2">
-                                    <span className={`text-[10px] px-2 py-1 rounded-full font-medium ${t.status === 'OPEN'
+                                    <span className={`text-[10px] px-2 py-1 rounded-full font-medium ${t.status === 'ANSWERED'
                                         ? 'bg-green-100 text-green-700'
                                         : 'bg-gray-100 text-gray-600'
                                         }`}>
-                                        {t.status === 'OPEN' ? 'پاسخ داده شده' : 'بسته شده'}
+                                        {t.status === 'ANSWERED' ? 'پاسخ داده شده' : t.status === 'OPEN' ? 'باز' : 'بسته شده'}
                                     </span>
                                     <span className="text-[10px] text-gray-400">{formatTime(t.lastUpdate)}</span>
                                 </div>
@@ -197,8 +201,8 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
                                     <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
                                         <span>شناسه تیکت: #{activeTicket.id.substring(0, 6)}</span>
                                         <span className="w-1 h-1 rounded-full bg-gray-300"></span>
-                                        <span className={`${activeTicket.status === 'OPEN' ? 'text-green-600' : 'text-gray-500'}`}>
-                                            {activeTicket.status === 'OPEN' ? 'باز' : 'بسته شده'}
+                                        <span className={`${activeTicket.status === 'ANSWERED' ? 'text-green-600' : 'text-gray-500'}`}>
+                                            {activeTicket.status === 'ANSWERED' ? 'پاسخ داده شده' : activeTicket.status === 'OPEN' ? 'باز' : 'بسته شده'}
                                         </span>
                                     </div>
                                 </div>

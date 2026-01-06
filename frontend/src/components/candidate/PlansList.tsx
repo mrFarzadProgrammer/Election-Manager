@@ -20,7 +20,7 @@ const PlansList: React.FC<PlansListProps> = ({ plans, onSelectPlan }) => {
 
             {/* Plans Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {plans.map((plan) => (
+                {plans.filter(p => p.is_visible).map((plan) => (
                     <div key={plan.id} className="bg-white rounded-3xl overflow-hidden shadow-sm border border-gray-100 hover:shadow-xl transition-all duration-300 flex flex-col group">
                         {/* Card Header with Color */}
                         <div
@@ -31,6 +31,11 @@ const PlansList: React.FC<PlansListProps> = ({ plans, onSelectPlan }) => {
                                 پیشنهاد ادمین
                             </div>
                             <h3 className="text-2xl font-bold mb-2">{plan.title}</h3>
+                            {plan.description && (
+                                <p className="text-sm text-white/90 mt-2 px-2 leading-relaxed">
+                                    {plan.description}
+                                </p>
+                            )}
                         </div>
 
                         {/* Price Section */}

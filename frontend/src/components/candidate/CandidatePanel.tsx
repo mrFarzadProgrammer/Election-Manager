@@ -28,6 +28,19 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
     const [isUploading, setIsUploading] = useState(false);
     const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
     const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
+    const [localPlans, setLocalPlans] = useState<Plan[]>(plans);
+
+    // Sync localPlans with prop when it changes
+    useEffect(() => {
+        setLocalPlans(plans);
+    }, [plans]);
+
+    // Refresh plans when entering PLANS tab
+    useEffect(() => {
+        if (activeTab === 'PLANS') {
+            api.getPlans().then(setLocalPlans).catch(console.error);
+        }
+    }, [activeTab]);
 
     useEffect(() => {
         api.getAnnouncements().then(setAnnouncements).catch(console.error);
@@ -152,7 +165,7 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                             <BotSettingsTab candidate={candidate} onUpdate={onUpdate} />
                         ) : (
                             <div className="h-full overflow-y-auto pr-2 custom-scrollbar">
-                                {activeTab === 'PLANS' && <PlansList plans={plans} onSelectPlan={(p) => { setSelectedPlan(p); setShowSubscriptionModal(true); }} />}
+                                {activeTab === 'PLANS' && <PlansList plans={localPlans} onSelectPlan={(p) => { setSelectedPlan(p); setShowSubscriptionModal(true); }} />}
                                 {activeTab === 'TICKETS' && <SupportChat tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} />}
                                 {activeTab === 'NOTIFICATIONS' && <AnnouncementsTab announcements={announcements} />}
                             </div>
