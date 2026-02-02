@@ -22,9 +22,9 @@ models.Base.metadata.create_all(bind=database.engine)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 Application started")
+    print("Application started")
     yield
-    print("🛑 Application shutdown")
+    print("Application shutdown")
 
 app = FastAPI(
     title="Election Manager",
