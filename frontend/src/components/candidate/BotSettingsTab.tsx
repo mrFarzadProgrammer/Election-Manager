@@ -4,7 +4,7 @@ import { Save, Clock, ShieldAlert, AlertTriangle } from 'lucide-react';
 
 interface BotSettingsTabProps {
     candidate: CandidateData;
-    onUpdate: (updatedData: Partial<CandidateData>) => void;
+    onUpdate: (updatedData: Partial<CandidateData>) => Promise<void>;
 }
 
 interface BotConfig {
@@ -30,12 +30,16 @@ const BotSettingsTab: React.FC<BotSettingsTabProps> = ({ candidate, onUpdate }) 
         setConfig(prev => ({ ...prev, [field]: value }));
     };
 
-    const handleSave = () => {
-        onUpdate({
-            ...candidate,
-            bot_config: config
-        });
-        alert('تنظیمات بات با موفقیت ذخیره شد.');
+    const handleSave = async () => {
+        try {
+            await onUpdate({
+                ...candidate,
+                bot_config: config
+            });
+            alert('تنظیمات بات با موفقیت ذخیره شد.');
+        } catch (e: any) {
+            alert(e?.message || 'خطا در ذخیره تنظیمات بات');
+        }
     };
 
     return (

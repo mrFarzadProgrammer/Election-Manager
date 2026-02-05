@@ -90,6 +90,53 @@ function App() {
     navigate('/login');
   };
 
+  const pickCandidateUpdatePayload = (updated: Partial<CandidateData> & Record<string, any>) => {
+    const payload: Record<string, any> = {};
+
+    const map: Array<[string, string]> = [
+      ['name', 'name'],
+      ['full_name', 'name'],
+      ['username', 'username'],
+      ['phone', 'phone'],
+      ['bot_name', 'bot_name'],
+      ['botName', 'bot_name'],
+      ['bot_token', 'bot_token'],
+      ['botToken', 'bot_token'],
+      ['slogan', 'slogan'],
+      ['bio', 'bio'],
+      ['city', 'city'],
+      ['province', 'province'],
+      ['image_url', 'image_url'],
+      ['resume', 'resume'],
+      ['ideas', 'ideas'],
+      ['address', 'address'],
+      ['voice_url', 'voice_url'],
+      ['socials', 'socials'],
+      ['bot_config', 'bot_config'],
+      ['is_active', 'is_active'],
+      ['isActive', 'is_active'],
+      ['password', 'password'],
+    ];
+
+    for (const [fromKey, toKey] of map) {
+      if (Object.prototype.hasOwnProperty.call(updated, fromKey)) {
+        const value = (updated as any)[fromKey];
+        if (value !== undefined) payload[toKey] = value;
+      }
+    }
+
+    // Never allow mutating identity/readonly fields from candidate panel.
+    delete payload.id;
+    delete payload.role;
+    delete payload.vote_count;
+    delete payload.created_at_jalali;
+    delete payload.active_plan_id;
+    delete payload.plan_start_date;
+    delete payload.plan_expires_at;
+
+    return payload;
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -121,7 +168,14 @@ function App() {
             candidate ? (
               <CandidatePanel
                 candidate={candidate}
-                onUpdate={(updated) => setCandidate(prev => prev ? ({ ...prev, ...updated }) : null)}
+                onUpdate={async (updated) => {
+                  if (!user || !token) {
+                    throw new Error('ابتدا وارد حساب کاربری شوید.');
+                  }
+                  const payload = pickCandidateUpdatePayload(updated as any);
+                  const saved = await api.updateCandidate(parseInt(String(user.id)), payload, token);
+                  setCandidate(saved as any);
+                }}
                 plans={plans}
                 tickets={tickets}
                 setTickets={setTickets}

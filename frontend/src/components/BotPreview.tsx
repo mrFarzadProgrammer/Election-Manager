@@ -10,6 +10,10 @@ const BotPreview: React.FC<BotPreviewProps> = ({ candidate }) => {
   const [activeMessage, setActiveMessage] = useState<string | null>("خوش آمدید! برای شروع یکی از گزینه‌ها را انتخاب کنید.");
   const [msgType, setMsgType] = useState<'TEXT' | 'IMAGE' | 'AUDIO'>('TEXT');
 
+  const botTitle = candidate.bot_name || candidate.username || 'bot';
+  const profileImageUrl = candidate.image_url;
+  const voiceUrl = candidate.voice_url;
+
   const handleCommand = (cmd: string, content: string | undefined, type: 'TEXT' | 'IMAGE' | 'AUDIO' = 'TEXT') => {
     setActiveMessage(content || "اطلاعاتی ثبت نشده است.");
     setMsgType(content ? type : 'TEXT');
@@ -24,14 +28,14 @@ const BotPreview: React.FC<BotPreviewProps> = ({ candidate }) => {
         {/* Telegram Header */}
         <div className="bg-[#517da2] text-white p-3 pt-8 flex items-center shadow-sm z-10">
           <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-2 overflow-hidden">
-            {candidate.photoUrl ? (
-                <img src={candidate.photoUrl} alt="Profile" className="w-full h-full object-cover" />
+            {profileImageUrl ? (
+              <img src={profileImageUrl} alt="Profile" className="w-full h-full object-cover" />
             ) : (
-                <Bot size={24} />
+              <Bot size={24} />
             )}
           </div>
           <div className="flex flex-col">
-            <span className="font-bold text-sm">{candidate.botName}</span>
+            <span className="font-bold text-sm">{botTitle}</span>
             <span className="text-[10px] opacity-80">bot</span>
           </div>
         </div>
@@ -41,74 +45,74 @@ const BotPreview: React.FC<BotPreviewProps> = ({ candidate }) => {
           {/* Incoming Message */}
           <div className="flex flex-col space-y-2">
             <div className="self-start bg-white rounded-lg rounded-tl-none p-3 shadow-sm max-w-[85%] text-sm text-gray-800 relative">
-               
-               {/* Text Content */}
-               {msgType === 'TEXT' && activeMessage}
 
-               {/* Image Content */}
-               {msgType === 'IMAGE' && activeMessage && (
-                   <div className="flex flex-col">
-                       <img src={activeMessage} alt="Candidate" className="rounded-lg w-full h-40 object-cover mb-1" />
-                       <span className="text-xs text-gray-600 mt-1">تصویر ارسالی بات</span>
-                   </div>
-               )}
+              {/* Text Content */}
+              {msgType === 'TEXT' && activeMessage}
 
-               {/* Audio Content */}
-               {msgType === 'AUDIO' && activeMessage && (
-                   <div className="flex items-center gap-3 w-48">
-                       <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white shrink-0">
-                           <Play size={20} fill="white" />
-                       </div>
-                       <div className="flex flex-col flex-1">
-                           <span className="text-blue-500 font-bold text-xs">Voice Message</span>
-                           <div className="h-1 bg-gray-300 rounded-full mt-1 w-full"></div>
-                           <span className="text-[10px] text-gray-400 mt-0.5">0:15</span>
-                       </div>
-                       {/* Hidden audio element for functionality if needed */}
-                       <audio src={activeMessage} className="hidden" />
-                   </div>
-               )}
+              {/* Image Content */}
+              {msgType === 'IMAGE' && activeMessage && (
+                <div className="flex flex-col">
+                  <img src={activeMessage} alt="Candidate" className="rounded-lg w-full h-40 object-cover mb-1" />
+                  <span className="text-xs text-gray-600 mt-1">تصویر ارسالی بات</span>
+                </div>
+              )}
 
-               <span className="text-[10px] text-gray-400 absolute bottom-1 right-2">12:00</span>
+              {/* Audio Content */}
+              {msgType === 'AUDIO' && activeMessage && (
+                <div className="flex items-center gap-3 w-48">
+                  <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white shrink-0">
+                    <Play size={20} fill="white" />
+                  </div>
+                  <div className="flex flex-col flex-1">
+                    <span className="text-blue-500 font-bold text-xs">Voice Message</span>
+                    <div className="h-1 bg-gray-300 rounded-full mt-1 w-full"></div>
+                    <span className="text-[10px] text-gray-400 mt-0.5">0:15</span>
+                  </div>
+                  {/* Hidden audio element for functionality if needed */}
+                  <audio src={activeMessage} className="hidden" />
+                </div>
+              )}
+
+              <span className="text-[10px] text-gray-400 absolute bottom-1 right-2">12:00</span>
             </div>
           </div>
         </div>
 
         {/* Keyboard Area */}
         <div className="bg-gray-200 p-2 pb-6">
-           <div className="grid grid-cols-2 gap-2">
-                <button 
-                    onClick={() => handleCommand('resume', candidate.resume, 'TEXT')}
-                    className="bg-white p-3 rounded-lg shadow-sm text-xs font-semibold text-gray-700 active:bg-blue-50 flex items-center justify-center gap-1">
-                    <FileText size={14}/> رزومه
-                </button>
-                <button 
-                    onClick={() => handleCommand('photo', candidate.photoUrl, 'IMAGE')}
-                    className="bg-white p-3 rounded-lg shadow-sm text-xs font-semibold text-gray-700 active:bg-blue-50 flex items-center justify-center gap-1">
-                    <User size={14}/> عکس و پروفایل
-                </button>
-                <button 
-                    onClick={() => handleCommand('address', candidate.address, 'TEXT')}
-                    className="bg-white p-3 rounded-lg shadow-sm text-xs font-semibold text-gray-700 active:bg-blue-50 flex items-center justify-center gap-1">
-                    <MapPin size={14}/> آدرس ستاد
-                </button>
-                <button 
-                    onClick={() => handleCommand('ideas', candidate.ideas, 'TEXT')}
-                    className="bg-white p-3 rounded-lg shadow-sm text-xs font-semibold text-gray-700 active:bg-blue-50 flex items-center justify-center gap-1">
-                    <Menu size={14}/> برنامه‌ها
-                </button>
-                <button 
-                     onClick={() => handleCommand('voice', candidate.voiceUrl, 'AUDIO')}
-                    className="bg-white p-3 rounded-lg shadow-sm text-xs font-semibold text-gray-700 active:bg-blue-50 flex items-center justify-center gap-1">
-                    <Mic size={14}/> پیام صوتی
-                </button>
-           </div>
-           
-           {/* Input field simulation */}
-           <div className="mt-2 flex items-center bg-white rounded-full px-3 py-2">
-               <span className="text-gray-400 text-xs flex-1">پیام...</span>
-               <Send size={16} className="text-[#517da2]"/>
-           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => handleCommand('resume', candidate.resume, 'TEXT')}
+              className="bg-white p-3 rounded-lg shadow-sm text-xs font-semibold text-gray-700 active:bg-blue-50 flex items-center justify-center gap-1">
+              <FileText size={14} /> رزومه
+            </button>
+            <button
+              onClick={() => handleCommand('photo', profileImageUrl, 'IMAGE')}
+              className="bg-white p-3 rounded-lg shadow-sm text-xs font-semibold text-gray-700 active:bg-blue-50 flex items-center justify-center gap-1">
+              <User size={14} /> عکس و پروفایل
+            </button>
+            <button
+              onClick={() => handleCommand('address', candidate.address, 'TEXT')}
+              className="bg-white p-3 rounded-lg shadow-sm text-xs font-semibold text-gray-700 active:bg-blue-50 flex items-center justify-center gap-1">
+              <MapPin size={14} /> آدرس ستاد
+            </button>
+            <button
+              onClick={() => handleCommand('ideas', candidate.ideas, 'TEXT')}
+              className="bg-white p-3 rounded-lg shadow-sm text-xs font-semibold text-gray-700 active:bg-blue-50 flex items-center justify-center gap-1">
+              <Menu size={14} /> برنامه‌ها
+            </button>
+            <button
+              onClick={() => handleCommand('voice', voiceUrl, 'AUDIO')}
+              className="bg-white p-3 rounded-lg shadow-sm text-xs font-semibold text-gray-700 active:bg-blue-50 flex items-center justify-center gap-1">
+              <Mic size={14} /> پیام صوتی
+            </button>
+          </div>
+
+          {/* Input field simulation */}
+          <div className="mt-2 flex items-center bg-white rounded-full px-3 py-2">
+            <span className="text-gray-400 text-xs flex-1">پیام...</span>
+            <Send size={16} className="text-[#517da2]" />
+          </div>
         </div>
       </div>
       <p className="mt-4 text-gray-500 text-sm font-medium">پیش‌نمایش بات تلگرام</p>

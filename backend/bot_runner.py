@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -16,6 +16,20 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+FAILED_BOT_COOLDOWN = timedelta(minutes=5)
+
+
+def looks_like_telegram_token(token: str | None) -> bool:
+    if not token:
+        return False
+    token = token.strip()
+    if not token or token.startswith("TOKEN_"):
+        return False
+    if ":" not in token:
+        return False
+    bot_id, secret = token.split(":", 1)
+    return bot_id.isdigit() and len(secret) >= 20
 
 # --- Helper for Non-Blocking DB Access ---
 async def run_db_query(func, *args, **kwargs):
@@ -150,6 +164,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     bot_config = candidate.get('bot_config') or {}
 
+    socials = candidate.get('socials') or {}
+    if isinstance(socials, dict):
+        # Normalize socials keys between snake_case (frontend) and camelCase (bot expectations)
+        if 'telegramChannel' not in socials and 'telegram_channel' in socials:
+            socials['telegramChannel'] = socials.get('telegram_channel')
+        if 'telegramGroup' not in socials and 'telegram_group' in socials:
+            socials['telegramGroup'] = socials.get('telegram_group')
+        # instagram key is already same in both, but keep for completeness
+        if 'instagram' not in socials and 'instagram' in socials:
+            socials['instagram'] = socials.get('instagram')
+
+    # Backward/forward compatibility between frontend and bot expectations
+    # Frontend currently stores keys like:
+    #   auto_lock_enabled, lock_start_time, lock_end_time, anti_link_enabled, forbidden_words
+    # Bot runner historically reads:
+    #   groupLockEnabled, lockStartTime, lockEndTime, blockLinks, badWords
+    if isinstance(bot_config, dict):
+        if 'groupLockEnabled' not in bot_config and 'auto_lock_enabled' in bot_config:
+            bot_config['groupLockEnabled'] = bool(bot_config.get('auto_lock_enabled'))
+        if 'lockStartTime' not in bot_config and 'lock_start_time' in bot_config:
+            bot_config['lockStartTime'] = bot_config.get('lock_start_time')
+        if 'lockEndTime' not in bot_config and 'lock_end_time' in bot_config:
+            bot_config['lockEndTime'] = bot_config.get('lock_end_time')
+        if 'blockLinks' not in bot_config and 'anti_link_enabled' in bot_config:
+            bot_config['blockLinks'] = bool(bot_config.get('anti_link_enabled'))
+        if 'badWords' not in bot_config and 'forbidden_words' in bot_config:
+            raw = bot_config.get('forbidden_words')
+            if isinstance(raw, str):
+                bot_config['badWords'] = [w.strip() for w in raw.split(',') if w.strip()]
+
+
     # --- Group Management Logic ---
     if chat_type in ['group', 'supergroup']:
         # 1. Check Group Lock
@@ -218,8 +263,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = candidate['address'] or "آدرس ستاد ثبت نشده است."
     elif text == "📞 تماس":
         response = f"شماره تماس: {candidate['phone'] or '---'}\n"
-        if candidate['socials']:
-            socials = candidate['socials']
+        if socials:
             if socials.get('telegramChannel'):
                 response += f"\nکانال تلگرام: {socials['telegramChannel']}"
             if socials.get('telegramGroup'):
@@ -240,6 +284,12 @@ async def run_bot(candidate: User):
     try:
         if not candidate.bot_token:
             logger.warning(f"Candidate {candidate.full_name} has no bot token.")
+            return
+
+        if not looks_like_telegram_token(candidate.bot_token):
+            logger.warning(
+                f"Candidate {candidate.full_name} has an invalid bot token format. Skipping start."
+            )
             return
 
         logger.info(f"Starting bot for {candidate.full_name} (@{candidate.bot_name})...")
@@ -272,6 +322,9 @@ async def run_bot(candidate: User):
 # Global dictionary to track running bots: candidate_id -> Application
 running_bots = {}
 
+# candidate_id -> last failure UTC time
+failed_bots = {}
+
 async def check_for_new_candidates():
     """Periodically checks for new active candidates and starts their bots."""
     while True:
@@ -292,11 +345,18 @@ async def check_for_new_candidates():
                 
                 # If candidate is active but bot is not running, start it
                 if candidate.id not in running_bots:
+                    last_failed_at = failed_bots.get(candidate.id)
+                    if last_failed_at and (datetime.now(timezone.utc) - last_failed_at) < FAILED_BOT_COOLDOWN:
+                        continue
+
                     if candidate.bot_token:
                         logger.info(f"Found new active candidate: {candidate.full_name}. Starting bot...")
                         app = await run_bot(candidate)
                         if app:
                             running_bots[candidate.id] = app
+                            failed_bots.pop(candidate.id, None)
+                        else:
+                            failed_bots[candidate.id] = datetime.now(timezone.utc)
             
             # Optional: Stop bots for candidates that are no longer active
             # (Implementation omitted for simplicity, but good to have)

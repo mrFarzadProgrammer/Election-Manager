@@ -5,7 +5,7 @@ import BotPreview from '../BotPreview';
 
 interface MyProgramsTabProps {
     candidate: CandidateData;
-    onUpdate: (updatedData: Partial<CandidateData>) => void;
+    onUpdate: (updatedData: Partial<CandidateData>) => Promise<void>;
 }
 
 const MyProgramsTab: React.FC<MyProgramsTabProps> = ({ candidate, onUpdate }) => {
@@ -15,9 +15,13 @@ const MyProgramsTab: React.FC<MyProgramsTabProps> = ({ candidate, onUpdate }) =>
         setFormData(prev => ({ ...prev, [field]: value }));
     };
 
-    const handleSave = () => {
-        onUpdate(formData);
-        alert('تغییرات با موفقیت ذخیره شد.');
+    const handleSave = async () => {
+        try {
+            await onUpdate(formData);
+            alert('تغییرات با موفقیت ذخیره شد.');
+        } catch (e: any) {
+            alert(e?.message || 'خطا در ذخیره تغییرات');
+        }
     };
 
     return (

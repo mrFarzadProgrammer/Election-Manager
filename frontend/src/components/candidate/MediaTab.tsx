@@ -5,7 +5,7 @@ import BotPreview from '../BotPreview';
 
 interface MediaTabProps {
     candidate: CandidateData;
-    onUpdate: (updatedData: Partial<CandidateData>) => void;
+    onUpdate: (updatedData: Partial<CandidateData>) => Promise<void>;
 }
 
 const MediaTab: React.FC<MediaTabProps> = ({ candidate, onUpdate }) => {
@@ -34,13 +34,17 @@ const MediaTab: React.FC<MediaTabProps> = ({ candidate, onUpdate }) => {
         }
     };
 
-    const handleSave = () => {
-        // Here you would typically upload the files and then update the candidate data
-        onUpdate({
-            ...formData,
-            image_url: previewImage || undefined
-        });
-        alert('تغییرات با موفقیت ذخیره شد.');
+    const handleSave = async () => {
+        try {
+            // Here you would typically upload the files and then update the candidate data
+            await onUpdate({
+                ...formData,
+                image_url: previewImage || undefined
+            });
+            alert('تغییرات با موفقیت ذخیره شد.');
+        } catch (e: any) {
+            alert(e?.message || 'خطا در ذخیره تغییرات');
+        }
     };
 
     return (

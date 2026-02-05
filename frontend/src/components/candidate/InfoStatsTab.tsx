@@ -6,7 +6,7 @@ import QuotesCarousel from '../QuotesCarousel';
 
 interface InfoStatsTabProps {
     candidate: CandidateData;
-    onUpdate: (updatedData: Partial<CandidateData>) => void;
+    onUpdate: (updatedData: Partial<CandidateData>) => Promise<void>;
     plans: Plan[];
     announcements: Announcement[];
 }
@@ -28,12 +28,16 @@ const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate, plans,
         setSocials(prev => ({ ...prev, [key]: value }));
     };
 
-    const handleSave = () => {
-        onUpdate({
-            ...formData,
-            socials: socials
-        });
-        alert('تغییرات با موفقیت ذخیره شد.');
+    const handleSave = async () => {
+        try {
+            await onUpdate({
+                ...formData,
+                socials: socials
+            });
+            alert('تغییرات با موفقیت ذخیره شد.');
+        } catch (e: any) {
+            alert(e?.message || 'خطا در ذخیره تغییرات');
+        }
     };
 
     return (

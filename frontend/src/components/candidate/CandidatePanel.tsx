@@ -13,7 +13,7 @@ import BotSettingsTab from './BotSettingsTab';
 
 interface CandidatePanelProps {
     candidate: CandidateData;
-    onUpdate: (updatedData: Partial<CandidateData>) => void;
+    onUpdate: (updatedData: Partial<CandidateData>) => Promise<void>;
     plans: Plan[];
     tickets: Ticket[];
     setTickets: React.Dispatch<React.SetStateAction<Ticket[]>>;
@@ -66,7 +66,14 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
         api.getAnnouncements().then(setAnnouncements).catch(console.error);
     }, []);
 
-    const handleSaveProfile = () => { onUpdate(formData); alert('ذخیره شد.'); };
+    const handleSaveProfile = async () => {
+        try {
+            await onUpdate(formData);
+            alert('ذخیره شد.');
+        } catch (e: any) {
+            alert(e?.message || 'خطا در ذخیره اطلاعات');
+        }
+    };
     const handleChange = (field: keyof CandidateData, value: string) => setFormData(prev => ({ ...prev, [field]: value }));
 
     const handleCreateTicket = async (subject: string, message: string) => {
