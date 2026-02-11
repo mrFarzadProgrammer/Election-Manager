@@ -25,9 +25,9 @@ const CandidatesTab: React.FC<CandidatesTabProps> = ({
 
     return (
         <div className='bg-white rounded-2xl shadow-sm border overflow-hidden'>
-            <div className='p-6 border-b flex items-center justify-between gap-4'>
+            <div className='p-6 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
                 <h3 className='font-bold text-lg'>لیست کاندیداها</h3>
-                <div className='relative w-64'>
+                <div className='relative w-full sm:w-64'>
                     <Search className='absolute right-3 top-3 text-gray-400' size={18} />
                     <input
                         type='text'

@@ -47,7 +47,8 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
         bot_token: '',
         phone: '',
         city: '',
-        province: ''
+        province: '',
+        constituency: ''
     });
 
     const itemsPerPage = 10;
@@ -63,6 +64,7 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
             (c.bot_name || '').toLowerCase().includes(query) ||
             (c.province || '').toLowerCase().includes(query) ||
             (c.city || '').toLowerCase().includes(query) ||
+            (c.constituency || '').toLowerCase().includes(query) ||
             statusText.includes(query)
         );
     });
@@ -89,7 +91,8 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
             bot_token: '',
             phone: '',
             city: '',
-            province: ''
+            province: '',
+            constituency: ''
         });
         setIsModalOpen(true);
     };
@@ -104,7 +107,8 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
             bot_token: candidate.bot_token || '',
             phone: candidate.phone || '',
             city: candidate.city || '',
-            province: candidate.province || ''
+            province: candidate.province || '',
+            constituency: candidate.constituency || ''
         });
         setIsModalOpen(true);
     };
@@ -208,6 +212,7 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
                                 <th className="px-6 py-4 text-right w-16">#</th>
                                 <th className="px-6 py-4 text-right">نام کاندید</th>
                                 <th className="px-6 py-4 text-right">اطلاعات بات</th>
+                                <th className="px-6 py-4 text-right">معرفی صوتی</th>
                                 <th className="px-6 py-4 text-right">موقعیت</th>
                                 <th className="px-6 py-4 text-right">پلن فعال</th>
                                 <th className="px-6 py-4 text-center">وضعیت</th>
@@ -248,14 +253,34 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
                                         </div>
                                     </td>
 
+                                    {/* Voice Intro (MVP: exists + duration only) */}
+                                    <td className="px-6 py-4">
+                                        {candidate.voice_url ? (
+                                            <div className="flex flex-col items-start gap-1">
+                                                <span className="text-xs font-bold text-green-700 bg-green-50 px-2 py-1 rounded-lg">دارد</span>
+                                                {typeof (candidate as any)?.bot_config?.voice_intro_duration === 'number' && (
+                                                    <span className="text-[10px] text-gray-500">مدت: {(candidate as any).bot_config.voice_intro_duration}s</span>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <span className="text-xs font-bold text-gray-500 bg-gray-50 px-2 py-1 rounded-lg">ندارد</span>
+                                        )}
+                                    </td>
+
                                     {/* Location Column */}
                                     <td className="px-6 py-4">
                                         <div className="flex items-center gap-1 text-gray-500 text-xs">
-                                            {candidate.city || candidate.province ? (
+                                            {candidate.constituency || candidate.city || candidate.province ? (
                                                 <>
-                                                    <span>{candidate.city}</span>
-                                                    {candidate.city && candidate.province && <span>، </span>}
-                                                    <span>{candidate.province}</span>
+                                                    {candidate.constituency ? (
+                                                        <span>{candidate.constituency}</span>
+                                                    ) : (
+                                                        <>
+                                                            <span>{candidate.city}</span>
+                                                            {candidate.city && candidate.province && <span>، </span>}
+                                                            <span>{candidate.province}</span>
+                                                        </>
+                                                    )}
                                                 </>
                                             ) : (
                                                 <span className="text-gray-400">-</span>
@@ -445,6 +470,16 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
                                             type="text"
                                             value={formData.province}
                                             onChange={e => setFormData({ ...formData, province: e.target.value })}
+                                            className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition"
+                                            placeholder="مثال: تهران"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium text-gray-700">حوزه انتخابیه</label>
+                                        <input
+                                            type="text"
+                                            value={formData.constituency}
+                                            onChange={e => setFormData({ ...formData, constituency: e.target.value })}
                                             className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 outline-none transition"
                                             placeholder="مثال: تهران"
                                         />

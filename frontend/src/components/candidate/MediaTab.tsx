@@ -1,7 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { CandidateData } from '../../types';
 import { Save, Bot, Mic, Image as ImageIcon, Upload } from 'lucide-react';
 import BotPreview from '../BotPreview';
+import { API_BASE } from '../../services/api';
 
 interface MediaTabProps {
     candidate: CandidateData;
@@ -11,19 +12,26 @@ interface MediaTabProps {
 const MediaTab: React.FC<MediaTabProps> = ({ candidate, onUpdate }) => {
     const [formData, setFormData] = useState<CandidateData>(candidate);
     const [previewImage, setPreviewImage] = useState<string | null>(candidate.image_url || null);
+    const [imageFile, setImageFile] = useState<File | null>(null);
     const [voiceFile, setVoiceFile] = useState<File | null>(null);
+    const [isSaving, setIsSaving] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const voiceInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        setFormData(candidate);
+        setPreviewImage(candidate.image_url || null);
+    }, [candidate]);
 
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
+            setImageFile(file);
             const reader = new FileReader();
             reader.onloadend = () => {
                 setPreviewImage(reader.result as string);
             };
             reader.readAsDataURL(file);
-            // In a real app, you would upload this file to the server here
         }
     };
 
@@ -35,15 +43,56 @@ const MediaTab: React.FC<MediaTabProps> = ({ candidate, onUpdate }) => {
     };
 
     const handleSave = async () => {
+        const token = localStorage.getItem('access_token');
+        if (!token) {
+            alert('ابتدا وارد حساب کاربری شوید.');
+            return;
+        }
+
+        setIsSaving(true);
         try {
-            // Here you would typically upload the files and then update the candidate data
+            let image_url = formData.image_url;
+            let voice_url = formData.voice_url;
+
+            if (imageFile) {
+                const fd = new FormData();
+                fd.append('file', imageFile);
+                const res = await fetch(`${API_BASE}/api/upload`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    body: fd
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data?.detail?.message || data?.detail || 'آپلود تصویر ناموفق بود');
+                image_url = data.url;
+            }
+
+            if (voiceFile) {
+                const fd = new FormData();
+                fd.append('file', voiceFile);
+                const res = await fetch(`${API_BASE}/api/upload`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    body: fd
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data?.detail?.message || data?.detail || 'آپلود فایل صوتی ناموفق بود');
+                voice_url = data.url;
+            }
+
             await onUpdate({
                 ...formData,
-                image_url: previewImage || undefined
+                image_url: image_url || undefined,
+                voice_url: voice_url || undefined,
             });
+
+            setImageFile(null);
+            setVoiceFile(null);
             alert('تغییرات با موفقیت ذخیره شد.');
         } catch (e: any) {
             alert(e?.message || 'خطا در ذخیره تغییرات');
+        } finally {
+            setIsSaving(false);
         }
     };
 
@@ -125,10 +174,11 @@ const MediaTab: React.FC<MediaTabProps> = ({ candidate, onUpdate }) => {
                     <div className="flex justify-end mt-auto">
                         <button
                             onClick={handleSave}
-                            className="flex items-center gap-2 bg-green-600 text-white px-6 py-2.5 rounded-xl hover:bg-green-700 transition-colors shadow-lg shadow-green-200 text-xs font-bold"
+                            disabled={isSaving}
+                            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl transition-colors shadow-lg text-xs font-bold ${isSaving ? 'bg-gray-300 text-gray-600 cursor-not-allowed shadow-gray-200' : 'bg-green-600 text-white hover:bg-green-700 shadow-green-200'}`}
                         >
                             <Save size={16} />
-                            ذخیره تغییرات
+                            {isSaving ? 'در حال ذخیره...' : 'ذخیره تغییرات'}
                         </button>
                     </div>
                 </div>

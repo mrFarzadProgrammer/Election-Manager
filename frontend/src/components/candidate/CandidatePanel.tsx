@@ -1,15 +1,31 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../services/api';
 import { CandidateData, Plan, Ticket, Announcement } from '../../types';
-import { FileText, CreditCard, MessageSquare, Bell, LogOut, User, Menu, X, LayoutDashboard, Image, Settings, List } from 'lucide-react';
-import ProfileTab from './ProfileTab';
-import PlansList from './PlansList';
-import SupportChat from './SupportChat';
-import AnnouncementsTab from './AnnouncementsTab';
-import InfoStatsTab from './InfoStatsTab';
-import MediaTab from './MediaTab';
-import MyProgramsTab from './MyProgramsTab';
-import BotSettingsTab from './BotSettingsTab';
+import {
+    Bell,
+    CreditCard,
+    FileText,
+    HelpCircle,
+    Lock,
+    LogOut,
+    MapPin,
+    Menu,
+    MessageSquare,
+    Mic,
+    Settings,
+    User,
+    Users,
+    ListChecks,
+} from 'lucide-react';
+import RepresentativeProfileV1 from './v1/RepresentativeProfileV1';
+import VoiceIntroV1 from './v1/VoiceIntroV1';
+import StructuredResumeV1 from './v1/StructuredResumeV1';
+import FixedProgramsV1 from './v1/FixedProgramsV1';
+import OfficesV1 from './v1/OfficesV1';
+import PublicFeedbackV1 from './v1/PublicFeedbackV1';
+import PublicQuestionsV1 from './v1/PublicQuestionsV1';
+import LockedFeatureNotice from './v1/LockedFeatureNotice';
+import ResultModal from './ui/ResultModal';
 
 interface CandidatePanelProps {
     candidate: CandidateData;
@@ -21,14 +37,11 @@ interface CandidatePanelProps {
 }
 
 const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, plans, tickets, setTickets, onLogout }) => {
-    const [activeTab, setActiveTab] = useState<'INFO_STATS' | 'MEDIA' | 'MY_PLANS' | 'BOT_SETTINGS' | 'PLANS' | 'TICKETS' | 'NOTIFICATIONS'>('INFO_STATS');
-    const [formData, setFormData] = useState<CandidateData>(candidate);
+    const [activeTab, setActiveTab] = useState<'PROFILE' | 'VOICE' | 'RESUME' | 'PROGRAMS' | 'OFFICES' | 'PUBLIC_MESSAGES' | 'PUBLIC_QUESTIONS' | 'BOT_SETTINGS' | 'PLANS' | 'TICKETS' | 'NOTIFICATIONS'>('PROFILE');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [announcements, setAnnouncements] = useState<Announcement[]>([]);
     const [isUploading, setIsUploading] = useState(false);
-    const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
-    const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
-    const [localPlans, setLocalPlans] = useState<Plan[]>(plans);
+    const [panelModal, setPanelModal] = useState<null | { variant: 'info' | 'warning' | 'error' | 'success'; title: string; message: string }>(null);
     const [readTicketTimes, setReadTicketTimes] = useState<{ [key: string]: number }>(() => {
         const saved = localStorage.getItem('read_ticket_times');
         return saved ? JSON.parse(saved) : {};
@@ -50,82 +63,57 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
         });
     };
 
-    // Sync localPlans with prop when it changes
-    useEffect(() => {
-        setLocalPlans(plans);
-    }, [plans]);
-
-    // Refresh plans when entering PLANS tab
-    useEffect(() => {
-        if (activeTab === 'PLANS') {
-            api.getPlans().then(setLocalPlans).catch(console.error);
-        }
-    }, [activeTab]);
-
     useEffect(() => {
         api.getAnnouncements().then(setAnnouncements).catch(console.error);
     }, []);
 
-    const handleSaveProfile = async () => {
-        try {
-            await onUpdate(formData);
-            alert('ذخیره شد.');
-        } catch (e: any) {
-            alert(e?.message || 'خطا در ذخیره اطلاعات');
-        }
-    };
-    const handleChange = (field: keyof CandidateData, value: string) => setFormData(prev => ({ ...prev, [field]: value }));
-
-    const handleCreateTicket = async (subject: string, message: string) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
-        const created = await api.createTicket(subject, message, token);
-        const newTicket: Ticket = {
-            id: created.id.toString(),
-            user_id: candidate.id,
-            userName: candidate.name,
-            subject: created.subject,
-            status: created.status as any,
-            lastUpdate: Date.now(),
-            messages: (created.messages || []).map((m: any) => ({
-                id: m.id.toString(),
-                senderId: m.sender_role === 'CANDIDATE' ? candidate.id : 'admin',
-                senderRole: m.sender_role,
-                text: m.text,
-                timestamp: new Date(m.created_at).getTime()
-            }))
-        };
-        setTickets(prev => [newTicket, ...prev]);
-        alert('تیکت ایجاد شد');
-    };
-
-    const handleReplyTicket = async (ticketId: string, message: string, attachment?: File) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
-        setIsUploading(true);
-        try {
-            let attachmentUrl = undefined;
-            let attachmentType = undefined;
-            if (attachment) {
-                const formData = new FormData(); formData.append('file', attachment);
-                const res = await fetch('http://localhost:8000/api/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData });
-                const data = await res.json(); attachmentUrl = data.url; attachmentType = attachment.type.startsWith('image/') ? 'IMAGE' : 'FILE';
-            }
-            const newMsg = await api.addTicketMessage(ticketId, message || (attachment ? '[فایل]' : ''), 'CANDIDATE', token, attachmentUrl, attachmentType as any);
-            setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, status: 'OPEN', lastUpdate: Date.now(), messages: [...t.messages, { id: newMsg.id.toString(), senderId: candidate.id, senderRole: 'CANDIDATE', text: newMsg.text, timestamp: Date.now(), attachmentUrl }] } : t));
-        } finally { setIsUploading(false); }
-    };
-
-    const myTickets = tickets.filter(t => t.user_id === candidate.id).sort((a, b) => b.lastUpdate - a.lastUpdate);
-    const unreadCount = myTickets.filter(t => {
+    const myTickets = useMemo(() => tickets.filter(t => t.user_id === candidate.id).sort((a, b) => b.lastUpdate - a.lastUpdate), [tickets, candidate.id]);
+    const unreadCount = useMemo(() => myTickets.filter(t => {
         if (t.status !== 'ANSWERED') return false;
         const lastRead = readTicketTimes[t.id] || 0;
         return t.lastUpdate > lastRead;
-    }).length;
+    }).length, [myTickets, readTicketTimes]);
+
+    const lockedTabs = useMemo(() => new Set(['BOT_SETTINGS', 'PLANS', 'TICKETS', 'NOTIFICATIONS']), []);
+
+    const trySetTab = (tab: typeof activeTab) => {
+        if (lockedTabs.has(tab)) {
+            setPanelModal({
+                variant: 'warning',
+                title: 'این بخش قفل است',
+                message: 'این بخش در نسخه فعلی قفل است.',
+            });
+            return;
+        }
+        setActiveTab(tab);
+        setIsMobileMenuOpen(false);
+    };
+
+    useEffect(() => {
+        if (lockedTabs.has(activeTab)) {
+            setActiveTab('PROFILE');
+        }
+    }, [activeTab, lockedTabs]);
 
     return (
-        <div className='flex h-full relative bg-gray-50'>
-            {isUploading && <div className='fixed inset-0 bg-black/50 z-[60] flex items-center justify-center'><div className='bg-white p-6 rounded-2xl'>در حال آپلود...</div></div>}
+        <div className='flex relative bg-gray-50 min-h-screen min-h-[100dvh] h-screen h-[100dvh] overflow-hidden'>
+            <ResultModal
+                open={!!panelModal}
+                variant={panelModal?.variant || 'info'}
+                title={panelModal?.title || ''}
+                message={panelModal?.message || ''}
+                onClose={() => setPanelModal(null)}
+            />
+
+            <ResultModal
+                open={isUploading}
+                variant="info"
+                title="در حال آپلود"
+                message="لطفاً چند لحظه صبر کنید..."
+                dismissable={false}
+                hideCloseIcon
+                onClose={() => setIsUploading(false)}
+            />
             <aside className={`fixed lg:static inset-y-0 right-0 z-30 w-64 bg-gray-50 transform transition-transform duration-300 ${isMobileMenuOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} pt-0 pr-0 pb-4 pl-0`}>
                 <div className='flex flex-col h-full bg-white rounded-bl-3xl shadow-sm border-l border-b border-gray-200 overflow-hidden'>
                     <div className='p-6 border-b flex items-center gap-3'>
@@ -135,23 +123,65 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                         <h2 className='font-bold text-gray-800 text-sm'>سامانه جامع انتخابات</h2>
                     </div>
                     <nav className='flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar'>
-                        <button onClick={() => setActiveTab('INFO_STATS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'INFO_STATS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><LayoutDashboard size={20} /> اطلاعات و آمار</button>
-                        <button onClick={() => setActiveTab('MEDIA')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'MEDIA' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Image size={20} /> رسانه و فایل</button>
-                        <button onClick={() => setActiveTab('MY_PLANS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'MY_PLANS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><List size={20} /> برنامه‌های من</button>
-                        <button onClick={() => setActiveTab('BOT_SETTINGS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'BOT_SETTINGS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Settings size={20} /> تنظیمات بات</button>
-                        <button onClick={() => setActiveTab('PLANS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PLANS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><CreditCard size={20} /> لیست پلن‌ها</button>
-                        <button onClick={() => setActiveTab('TICKETS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'TICKETS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-                            <div className="relative">
-                                <MessageSquare size={20} />
-                                {unreadCount > 0 && (
-                                    <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full animate-pulse">
-                                        {unreadCount}
-                                    </span>
-                                )}
-                            </div>
-                            پشتیبانی
+                        <button onClick={() => trySetTab('PROFILE')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PROFILE' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><User size={20} /> پروفایل نماینده</button>
+                        <button onClick={() => trySetTab('VOICE')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'VOICE' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Mic size={20} /> معرفی صوتی</button>
+                        <button onClick={() => trySetTab('RESUME')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'RESUME' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><FileText size={20} /> سوابق</button>
+                        <button onClick={() => trySetTab('PROGRAMS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PROGRAMS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><ListChecks size={20} /> برنامه‌ها</button>
+                        <button onClick={() => trySetTab('OFFICES')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'OFFICES' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><MapPin size={20} /> ستادها</button>
+                        <button onClick={() => trySetTab('PUBLIC_MESSAGES')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PUBLIC_MESSAGES' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Users size={20} /> نظرات و دغدغه‌ها</button>
+                        <button onClick={() => trySetTab('PUBLIC_QUESTIONS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PUBLIC_QUESTIONS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><HelpCircle size={20} /> سؤال‌های مردمی</button>
+
+                        <div className='pt-3 border-t border-gray-100' />
+
+                        <button
+                            onClick={() => trySetTab('BOT_SETTINGS')}
+                            disabled
+                            className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
+                            title='این بخش در نسخه فعلی قفل است'
+                        >
+                            <span className='flex items-center gap-3'><Settings size={20} /> تنظیمات بات</span>
+                            <Lock size={16} />
                         </button>
-                        <button onClick={() => setActiveTab('NOTIFICATIONS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'NOTIFICATIONS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Bell size={20} /> اطلاعیه‌ها</button>
+
+                        <button
+                            onClick={() => trySetTab('PLANS')}
+                            disabled
+                            className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
+                            title='این بخش در نسخه فعلی قفل است'
+                        >
+                            <span className='flex items-center gap-3'><CreditCard size={20} /> لیست پلن‌ها</span>
+                            <Lock size={16} />
+                        </button>
+
+                        <button
+                            onClick={() => trySetTab('TICKETS')}
+                            disabled
+                            className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
+                            title='این بخش در نسخه فعلی قفل است'
+                        >
+                            <span className='flex items-center gap-3'>
+                                <span className="relative">
+                                    <MessageSquare size={20} />
+                                    {unreadCount > 0 && (
+                                        <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full">
+                                            {unreadCount}
+                                        </span>
+                                    )}
+                                </span>
+                                پشتیبانی
+                            </span>
+                            <Lock size={16} />
+                        </button>
+
+                        <button
+                            onClick={() => trySetTab('NOTIFICATIONS')}
+                            disabled
+                            className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
+                            title='این بخش در نسخه فعلی قفل است'
+                        >
+                            <span className='flex items-center gap-3'><Bell size={20} /> اطلاعیه‌ها</span>
+                            <Lock size={16} />
+                        </button>
                     </nav>
                     <div className="px-4 mb-4 mt-auto">
                         <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
@@ -165,8 +195,8 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                     </div>
                 </div>
             </aside>
-            <main className='flex-1 flex flex-col min-w-0 overflow-hidden h-screen'>
-                <header className='bg-white shadow-sm border-b px-6 py-3 flex items-center justify-between'>
+            <main className='flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden'>
+                <header className='bg-white shadow-sm border-b px-4 sm:px-6 py-3 flex items-center justify-between'>
                     <button className='lg:hidden' onClick={() => setIsMobileMenuOpen(true)}><Menu size={24} /></button>
 
                     {/* User Profile Card (Left Side) */}
@@ -185,37 +215,21 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                         </div>
                     </div>
                 </header>
-                <div className='flex-1 overflow-hidden p-2 lg:p-4 flex flex-col'>
+                <div className='flex-1 min-h-0 overflow-hidden p-2 sm:p-3 lg:p-4 flex flex-col'>
                     <div className='w-full h-full flex flex-col'>
-                        {activeTab === 'INFO_STATS' ? (
-                            <InfoStatsTab candidate={candidate} onUpdate={onUpdate} plans={plans} announcements={announcements} />
-                        ) : activeTab === 'MEDIA' ? (
-                            <MediaTab candidate={candidate} onUpdate={onUpdate} />
-                        ) : activeTab === 'MY_PLANS' ? (
-                            <MyProgramsTab candidate={candidate} onUpdate={onUpdate} />
-                        ) : activeTab === 'BOT_SETTINGS' ? (
-                            <BotSettingsTab candidate={candidate} onUpdate={onUpdate} />
-                        ) : (
-                            <div className="h-full overflow-y-auto pr-2 custom-scrollbar">
-                                {activeTab === 'PLANS' && <PlansList plans={localPlans} onSelectPlan={(p) => { setSelectedPlan(p); setShowSubscriptionModal(true); }} />}
-                                {activeTab === 'TICKETS' && <SupportChat tickets={myTickets} onCreateTicket={handleCreateTicket} onReplyTicket={handleReplyTicket} isUploading={isUploading} onTicketOpen={handleTicketOpen} readTicketTimes={readTicketTimes} />}
-                                {activeTab === 'NOTIFICATIONS' && <AnnouncementsTab announcements={announcements} />}
-                            </div>
-                        )}
+                        <div className="h-full overflow-y-auto pr-2 custom-scrollbar">
+                            {activeTab === 'PROFILE' && <RepresentativeProfileV1 candidate={candidate} onUpdate={onUpdate} />}
+                            {activeTab === 'VOICE' && <VoiceIntroV1 candidate={candidate} onUpdate={onUpdate} />}
+                            {activeTab === 'RESUME' && <StructuredResumeV1 candidate={candidate} onUpdate={onUpdate} />}
+                            {activeTab === 'PROGRAMS' && <FixedProgramsV1 candidate={candidate} onUpdate={onUpdate} />}
+                            {activeTab === 'OFFICES' && <OfficesV1 candidate={candidate} onUpdate={onUpdate} />}
+                            {activeTab === 'PUBLIC_MESSAGES' && <PublicFeedbackV1 candidate={candidate} />}
+                            {activeTab === 'PUBLIC_QUESTIONS' && <PublicQuestionsV1 candidate={candidate} />}
+                            {lockedTabs.has(activeTab) && <LockedFeatureNotice />}
+                        </div>
                     </div>
                 </div>
             </main>
-            {showSubscriptionModal && (
-                <div className='fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4'>
-                    <div className='bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl relative'>
-                        <button onClick={() => setShowSubscriptionModal(false)} className='absolute top-4 left-4 text-gray-400'><X size={24} /></button>
-                        <h3 className='text-xl font-bold text-center mb-4'>خرید اشتراک {selectedPlan?.title}</h3>
-                        <p className='text-center mb-6'>لطفاً مبلغ {selectedPlan?.price ? Number(selectedPlan.price).toLocaleString('fa-IR') : ''} تومان را واریز کنید.</p>
-                        <div className='bg-gray-50 p-4 rounded-xl text-center mb-6 font-mono text-xl font-bold'>6104 3389 6232 1390</div>
-                        <button onClick={() => { setShowSubscriptionModal(false); setActiveTab('TICKETS'); handleCreateTicket(`فیش واریز - ${selectedPlan?.title}`, 'تصویر فیش پیوست شد.'); }} className='w-full py-3 bg-blue-600 text-white rounded-xl'>ارسال فیش واریز</button>
-                    </div>
-                </div>
-            )}
             {isMobileMenuOpen && <div className='fixed inset-0 bg-black/50 z-20 lg:hidden' onClick={() => setIsMobileMenuOpen(false)} />}
         </div>
     );

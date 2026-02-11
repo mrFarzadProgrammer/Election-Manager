@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CandidateData } from '../../types';
 import { Save, Bot } from 'lucide-react';
 import BotPreview from '../BotPreview';
@@ -10,6 +10,10 @@ interface MyProgramsTabProps {
 
 const MyProgramsTab: React.FC<MyProgramsTabProps> = ({ candidate, onUpdate }) => {
     const [formData, setFormData] = useState<CandidateData>(candidate);
+
+    useEffect(() => {
+        setFormData(candidate);
+    }, [candidate]);
 
     const handleChange = (field: keyof CandidateData, value: string) => {
         setFormData(prev => ({ ...prev, [field]: value }));

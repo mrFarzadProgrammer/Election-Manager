@@ -17,6 +17,7 @@ export interface CandidateData {
     bot_token?: string;
     city?: string;
     province?: string;
+    constituency?: string;
     is_active?: boolean;
     vote_count?: number;
     created_at_jalali?: string;
@@ -71,4 +72,74 @@ export interface Announcement {
     content: string;
     created_at: string;
     attachments?: { url: string; type: 'IMAGE' | 'VIDEO' | 'VOICE' | 'FILE' }[];
+}
+
+export type FeedbackStatus = 'NEW' | 'REVIEWED';
+
+export type QuestionStatus = 'PENDING' | 'ANSWERED' | 'REJECTED';
+
+export interface QuestionSubmission {
+    id: string;
+    candidate_id: string;
+    text: string;
+    created_at: string;
+    topic?: string | null;
+    constituency?: string;
+    status: QuestionStatus;
+    answer_text?: string | null;
+    answered_at?: string | null;
+    is_public?: boolean;
+    is_featured?: boolean;
+}
+
+export interface FeedbackSubmission {
+    id: string;
+    candidate_id: string;
+    text: string;
+    created_at: string;
+    constituency?: string;
+    status: FeedbackStatus;
+    tag?: string | null;
+}
+
+export interface FeedbackTagStat {
+    tag: string;
+    count: number;
+    percent: number;
+}
+
+export interface FeedbackStatsResponse {
+    days: 7 | 30;
+    total: number;
+    items: FeedbackTagStat[];
+}
+
+export interface AdminDashboardStats {
+    active_bots: number;
+    total_questions: number;
+    total_feedback: number;
+    total_bot_requests: number;
+}
+
+export interface AdminCandidateStats {
+    candidate_id: string;
+    total_questions: number;
+    total_feedback: number;
+    answered_questions: number;
+}
+
+export type BotRequestStatus = 'new_request' | 'in_progress' | 'done' | string;
+
+export interface BotRequestSubmission {
+    id: string;
+    candidate_id: string;
+    telegram_user_id: string;
+    telegram_username?: string | null;
+    requester_full_name?: string | null;
+    requester_contact?: string | null;
+    role?: string | null;
+    constituency?: string | null;
+    status: BotRequestStatus;
+    text: string;
+    created_at: string;
 }

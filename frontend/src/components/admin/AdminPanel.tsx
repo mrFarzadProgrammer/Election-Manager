@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '../../services/api';
+import { api, API_BASE } from '../../services/api';
 import { CandidateData, Plan, Ticket, Announcement } from '../../types';
-import { Users, CreditCard, MessageSquare, Megaphone, LogOut, LayoutDashboard, Menu, CheckSquare, User } from 'lucide-react';
+import { Users, CreditCard, MessageSquare, Megaphone, LogOut, LayoutDashboard, Menu, CheckSquare, User, Bot } from 'lucide-react';
 import CandidatesTab from './CandidatesTab';
 import CandidatesManagement from './CandidatesManagement';
 import PlansTab from './PlansTab';
 import TicketsTab from './TicketsTab';
 import AnnouncementsTab from './AnnouncementsTab';
 import DashboardTab from './DashboardTab';
+import BotRequestsTab from './BotRequestsTab';
 
 interface AdminPanelProps {
     candidates: CandidateData[];
@@ -20,7 +21,7 @@ interface AdminPanelProps {
 }
 
 const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plans, setPlans, tickets, setTickets, onLogout }) => {
-    const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'CANDIDATES' | 'PLANS' | 'TICKETS' | 'ANNOUNCEMENTS'>('DASHBOARD');
+    const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'CANDIDATES' | 'PLANS' | 'TICKETS' | 'ANNOUNCEMENTS' | 'BOT_REQUESTS'>('DASHBOARD');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -135,7 +136,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
                 formData.append('file', attachment);
 
                 // Use api.uploadFile instead of direct fetch if possible, or keep direct fetch but use API_BASE
-                const API_BASE = "http://localhost:8000"; // Should ideally come from config
                 const res = await fetch(`${API_BASE}/api/upload`, {
                     method: 'POST',
                     headers: { 'Authorization': `Bearer ${token}` },
@@ -188,7 +188,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
             for (const file of files) {
                 const formData = new FormData();
                 formData.append('file', file);
-                const res = await fetch('http://localhost:8000/api/upload', {
+                const res = await fetch(`${API_BASE}/api/upload`, {
                     method: 'POST',
                     headers: { 'Authorization': `Bearer ${token}` },
                     body: formData
@@ -220,6 +220,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
         { id: 'DASHBOARD', label: 'داشبورد', icon: <LayoutDashboard size={20} /> },
         { id: 'CANDIDATES', label: 'کاندیداها', icon: <Users size={20} /> },
         { id: 'PLANS', label: 'پلن‌ها', icon: <CreditCard size={20} /> },
+        { id: 'BOT_REQUESTS', label: 'درخواست ساخت بات', icon: <Bot size={20} /> },
         {
             id: 'TICKETS',
             label: 'پشتیبانی',
@@ -238,7 +239,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
     ];
 
     return (
-        <div className='flex h-screen bg-gray-50 overflow-hidden'>
+        <div className='flex bg-gray-50 overflow-hidden min-h-screen min-h-[100dvh] h-screen h-[100dvh]'>
             {isUploading && <div className='fixed inset-0 bg-black/50 z-[60] flex items-center justify-center'><div className='bg-white p-6 rounded-2xl'>در حال آپلود...</div></div>}
             <aside className={`fixed lg:static inset-y-0 right-0 z-30 w-64 bg-white shadow-lg transform transition-transform duration-300 ${isMobileMenuOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}>
                 <div className='flex flex-col h-full'>
@@ -263,9 +264,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
                     </div>
                 </div>
             </aside>
-            <main className='flex-1 flex flex-col min-w-0 overflow-hidden'>
+            <main className='flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden'>
                 {/* Top Header */}
-                <header className='bg-white shadow-sm border-b px-8 py-4 flex items-center justify-between'>
+                <header className='bg-white shadow-sm border-b px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between'>
                     <div className="lg:hidden">
                         <button onClick={() => setIsMobileMenuOpen(true)}><Menu size={24} /></button>
                     </div>
@@ -285,11 +286,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
                     </div>
                 </header>
 
-                <div className='flex-1 overflow-y-auto p-4 lg:p-8'>
+                <div className='flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 lg:p-8'>
                     <div className='w-full mx-auto'>
                         {activeTab === 'DASHBOARD' && <DashboardTab candidates={candidates} plans={plans} tickets={tickets} onTabChange={setActiveTab} />}
                         {activeTab === 'CANDIDATES' && <CandidatesManagement candidates={candidates} plans={plans} searchQuery={searchQuery} setSearchQuery={setSearchQuery} onEdit={handleEditCandidate} onDelete={handleDeleteCandidate} onToggleStatus={handleToggleStatus} onAdd={handleAddCandidate} onResetPassword={handleResetPassword} onAssignPlan={handleAssignPlan} />}
                         {activeTab === 'PLANS' && <PlansTab plans={plans} onSavePlan={handleSavePlan} onDeletePlan={handleDeletePlan} />}
+                        {activeTab === 'BOT_REQUESTS' && <BotRequestsTab />}
                         {activeTab === 'TICKETS' && <TicketsTab tickets={tickets} onReply={handleTicketReply} onCloseTicket={() => { }} isUploading={isUploading} onTicketOpen={handleTicketOpen} readTicketTimes={readTicketTimes} />}
                         {activeTab === 'ANNOUNCEMENTS' && <AnnouncementsTab announcements={announcements} onSendAnnouncement={handleSendAnnouncement} onDeleteAnnouncement={() => { }} isUploading={isUploading} />}
                     </div>

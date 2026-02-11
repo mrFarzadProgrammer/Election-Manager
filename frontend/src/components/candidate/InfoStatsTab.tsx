@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CandidateData, Plan, Announcement } from '../../types';
 import { Save, Share, Users, MapPin, Link as LinkIcon, Instagram, Send, ExternalLink, Bot, CreditCard, Megaphone } from 'lucide-react';
 import BotPreview from '../BotPreview';
@@ -16,6 +16,11 @@ const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate, plans,
     const [socials, setSocials] = useState<{ telegram_channel?: string; telegram_group?: string; instagram?: string }>(
         candidate.socials || {}
     );
+
+    useEffect(() => {
+        setFormData(candidate);
+        setSocials(candidate.socials || {});
+    }, [candidate]);
 
     const activePlan = plans.find(p => p.id.toString() === candidate.active_plan_id?.toString());
     const recentAnnouncements = announcements.slice(0, 2);

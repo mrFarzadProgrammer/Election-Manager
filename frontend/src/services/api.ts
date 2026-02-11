@@ -1,8 +1,27 @@
-import { User, CandidateData as Candidate, Plan, Ticket, Announcement } from "../types";
+import { User, CandidateData as Candidate, Plan, Ticket, Announcement, FeedbackSubmission, FeedbackStatsResponse, QuestionSubmission, BotRequestSubmission, AdminDashboardStats } from "../types";
 
-const API_BASE =
+const VITE_API_BASE =
+    (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
+    undefined;
+
+export const API_BASE =
+    VITE_API_BASE ||
     (typeof process !== "undefined" && (process as any).env?.REACT_APP_API_BASE_URL) ||
-    "http://localhost:8000";
+    "http://127.0.0.1:8000";
+
+const normalizeAbsoluteUrl = (url: any): any => {
+    if (typeof url !== "string") return url;
+    const trimmed = url.trim();
+    if (!trimmed) return url;
+
+    const knownBases = ["http://localhost:8000", "http://127.0.0.1:8000"];
+    for (const base of knownBases) {
+        if (trimmed.startsWith(base + "/")) {
+            return API_BASE.replace(/\/$/, "") + trimmed.slice(base.length);
+        }
+    }
+    return url;
+};
 
 type ApiErrorPayload =
     | { detail?: any; message?: string }
@@ -35,7 +54,49 @@ const readBodySafely = async (res: Response) => {
     }
 };
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+type RefreshResponse = {
+    access_token: string;
+    refresh_token: string;
+    token_type: string;
+};
+
+const hasAuthorizationHeader = (headers?: RequestInit["headers"]) => {
+    if (!headers) return false;
+    if (headers instanceof Headers) return headers.has("Authorization");
+    if (Array.isArray(headers)) return headers.some(([k]) => String(k).toLowerCase() === "authorization");
+    return Object.keys(headers as any).some((k) => k.toLowerCase() === "authorization");
+};
+
+const setAuthorizationHeader = (headers: RequestInit["headers"], value: string) => {
+    const h = new Headers(headers as any);
+    h.set("Authorization", value);
+    return h;
+};
+
+const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
+    const refreshToken = localStorage.getItem("refresh_token");
+    if (!refreshToken) return null;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+
+        if (!res.ok) return null;
+        const data = (await res.json()) as RefreshResponse;
+        if (!data?.access_token) return null;
+
+        localStorage.setItem("access_token", data.access_token);
+        if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
+        return data;
+    } catch {
+        return null;
+    }
+};
+
+async function request<T>(path: string, options: RequestInit = {}, _retried: boolean = false): Promise<T> {
     const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
 
     let res: Response;
@@ -46,6 +107,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
 
     if (!res.ok) {
+        // If access token expired, try refreshing once and retry the original request.
+        if (res.status === 401 && !_retried && hasAuthorizationHeader(options.headers)) {
+            const refreshed = await refreshAccessToken();
+            if (refreshed?.access_token) {
+                const nextHeaders = setAuthorizationHeader(options.headers, `Bearer ${refreshed.access_token}`);
+                return request<T>(path, { ...options, headers: nextHeaders }, true);
+            }
+
+            // Refresh failed: treat as expired session.
+            localStorage.removeItem("access_token");
+            localStorage.removeItem("refresh_token");
+            throw new Error("نشست شما منقضی شده است. لطفاً دوباره وارد شوید.");
+        }
+
         const payload = await readBodySafely(res);
         const fallback = `خطا در درخواست (${res.status})`;
         const message = extractApiMessage(payload, fallback);
@@ -73,6 +148,8 @@ const mapCandidate = (c: any): Candidate => ({
     active_plan_id: c.active_plan_id ? String(c.active_plan_id) : undefined,
     plan_start_date: c.plan_start_date,
     plan_expires_at: c.plan_expires_at,
+    image_url: normalizeAbsoluteUrl(c.image_url),
+    voice_url: normalizeAbsoluteUrl(c.voice_url),
 });
 
 const mapPlan = (p: any): Plan => ({
@@ -93,6 +170,18 @@ const ensureUtc = (dateStr: string) => {
     return new Date(dateStr).getTime();
 };
 
+const normalizeIsoUtcString = (value: any): string => {
+    if (typeof value !== 'string') return String(value ?? '');
+    const s = value.trim();
+    if (!s) return '';
+    // If it's an ISO-like timestamp without timezone, treat it as UTC.
+    // Example from FastAPI (naive UTC): 2026-02-07T17:14:37.123456
+    if (s.includes('T') && !/(Z|[+-]\d{2}:\d{2})$/.test(s)) {
+        return s + 'Z';
+    }
+    return s;
+};
+
 const mapTicket = (t: any): Ticket => ({
     ...t,
     id: String(t.id),
@@ -108,6 +197,47 @@ const mapTicket = (t: any): Ticket => ({
         attachmentUrl: m.attachmentUrl || m.attachment_url,
         attachmentType: m.attachmentType || m.attachment_type,
     }))
+});
+
+const mapFeedbackSubmission = (s: any): FeedbackSubmission => ({
+    ...s,
+    id: String(s.id),
+    candidate_id: String(s.candidate_id),
+    text: String(s.text ?? ''),
+    created_at: normalizeIsoUtcString(s.created_at),
+    constituency: typeof s.constituency === 'string' ? s.constituency : undefined,
+    status: (s.status || 'NEW'),
+    tag: s.tag ?? null,
+});
+
+const mapQuestionSubmission = (s: any): QuestionSubmission => ({
+    ...s,
+    id: String(s.id),
+    candidate_id: String(s.candidate_id),
+    text: String(s.text ?? ''),
+    created_at: normalizeIsoUtcString(s.created_at),
+    topic: typeof s.topic === 'string' ? s.topic : (s.topic ?? null),
+    constituency: typeof s.constituency === 'string' ? s.constituency : undefined,
+    status: (String(s.status || 'PENDING').toUpperCase() as any),
+    answer_text: s.answer_text ?? s.answer ?? null,
+    answered_at: s.answered_at ? normalizeIsoUtcString(s.answered_at) : null,
+    is_public: Boolean(s.is_public ?? false),
+    is_featured: Boolean(s.is_featured ?? false),
+});
+
+const mapBotRequestSubmission = (s: any): BotRequestSubmission => ({
+    ...s,
+    id: String(s.id),
+    candidate_id: String(s.candidate_id),
+    telegram_user_id: String(s.telegram_user_id ?? ''),
+    telegram_username: s.telegram_username ?? null,
+    requester_full_name: s.requester_full_name ?? null,
+    requester_contact: s.requester_contact ?? null,
+    role: s.role ?? s.topic ?? null,
+    constituency: s.constituency ?? null,
+    status: String(s.status ?? 'new_request'),
+    text: String(s.text ?? ''),
+    created_at: normalizeIsoUtcString(s.created_at),
 });
 
 export interface AuthResponse {
@@ -149,6 +279,38 @@ export const api = {
         return { ...user, id: String(user.id) };
     },
 
+    // ========== Admin Dashboard (MVP) ==========
+    getAdminDashboardStats: async (token: string): Promise<AdminDashboardStats> => {
+        return request<AdminDashboardStats>("/api/admin/dashboard-stats", {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+        });
+    },
+
+    // ========== Admin: Bot Requests (Build bot) ==========
+    getBotRequests: async (token: string, status?: string): Promise<BotRequestSubmission[]> => {
+        const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+        const data = await request<any[]>(`/api/admin/bot-requests${qs}`, {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        return (data || []).map(mapBotRequestSubmission);
+    },
+
+    updateBotRequestStatus: async (id: string, status: string, token: string): Promise<BotRequestSubmission> => {
+        const data = await request<any>(`/api/admin/bot-requests/${encodeURIComponent(id)}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ status }),
+        });
+        return mapBotRequestSubmission(data);
+    },
+
     // ========== Candidates ==========
     getCandidate: async (id: number, token?: string): Promise<Candidate> => {
         const headers: any = { "Content-Type": "application/json" };
@@ -161,6 +323,105 @@ export const api = {
             headers,
         });
         return mapCandidate(data);
+    },
+
+    // ========== Feedback Submissions (Candidate MVP) ==========
+    getMyFeedbackSubmissions: async (token: string): Promise<FeedbackSubmission[]> => {
+        const data = await request<any[]>(`/api/candidates/me/feedback`, {
+            method: "GET",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+        });
+        return (data || []).map(mapFeedbackSubmission);
+    },
+
+    updateMyFeedbackSubmission: async (
+        token: string,
+        submissionId: string,
+        patch: { tag?: string | null; status?: 'NEW' | 'REVIEWED' }
+    ): Promise<FeedbackSubmission> => {
+        const data = await request<any>(`/api/candidates/me/feedback/${encodeURIComponent(String(submissionId))}`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(patch),
+        });
+        return mapFeedbackSubmission(data);
+    },
+
+    getMyFeedbackStats: async (token: string, days: 7 | 30): Promise<FeedbackStatsResponse> => {
+        return request<FeedbackStatsResponse>(`/api/candidates/me/feedback/stats?days=${days}`, {
+            method: "GET",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+        });
+    },
+
+    // ========== Public Questions (Candidate MVP) ==========
+    getMyQuestionSubmissions: async (token: string): Promise<QuestionSubmission[]> => {
+        const data = await request<any[]>(`/api/candidates/me/questions`, {
+            method: "GET",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+        });
+        return (data || []).map(mapQuestionSubmission);
+    },
+
+    answerMyQuestionSubmission: async (
+        token: string,
+        submissionId: string,
+        answer_text: string,
+        options?: { topic?: string | null; is_featured?: boolean }
+    ): Promise<QuestionSubmission> => {
+        const data = await request<any>(`/api/candidates/me/questions/${encodeURIComponent(String(submissionId))}/answer`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+                answer_text,
+                topic: options?.topic ?? undefined,
+                is_featured: options?.is_featured ?? undefined,
+            }),
+        });
+        return mapQuestionSubmission(data);
+    },
+
+    rejectMyQuestionSubmission: async (token: string, submissionId: string): Promise<QuestionSubmission> => {
+        const data = await request<any>(`/api/candidates/me/questions/${encodeURIComponent(String(submissionId))}/reject`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({}),
+        });
+        return mapQuestionSubmission(data);
+    },
+
+    updateMyQuestionSubmissionMeta: async (
+        token: string,
+        submissionId: string,
+        payload: { topic?: string | null; is_featured?: boolean }
+    ): Promise<QuestionSubmission> => {
+        const data = await request<any>(`/api/candidates/me/questions/${encodeURIComponent(String(submissionId))}/meta`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(payload),
+        });
+        return mapQuestionSubmission(data);
     },
 
     getCandidates: async (): Promise<Candidate[]> => {
@@ -196,6 +457,15 @@ export const api = {
             body: JSON.stringify(payload),
         });
         return mapCandidate(data);
+    },
+
+    applyTelegramProfile: async (candidateId: string | number, token: string): Promise<any> => {
+        return request<any>(`/api/candidates/${candidateId}/apply-telegram-profile`, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+        });
     },
 
     updateCandidateStatus: async (id: string, isActive: boolean, token: string): Promise<Candidate> => {

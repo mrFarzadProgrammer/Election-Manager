@@ -106,6 +106,7 @@ function App() {
       ['bio', 'bio'],
       ['city', 'city'],
       ['province', 'province'],
+      ['constituency', 'constituency'],
       ['image_url', 'image_url'],
       ['resume', 'resume'],
       ['ideas', 'ideas'],
