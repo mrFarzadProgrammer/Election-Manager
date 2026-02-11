@@ -2,4 +2,8 @@
 *.db
 *.sqlite
 *.sqlite3
+
+# Bot runner artifacts
+.bot_runner.lock
+bot_runner.*.log
 ```
