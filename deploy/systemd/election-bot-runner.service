@@ -1,0 +1,22 @@
+[Unit]
+Description=Election Manager Telegram Bot Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/election-manager/backend
+ExecStart=/usr/bin/python3 bot_runner.py
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+# If you use a venv, replace ExecStart with:
+# ExecStart=/opt/election-manager/.venv/bin/python bot_runner.py
+
+# Hardening (optional)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
