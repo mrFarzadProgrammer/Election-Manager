@@ -20,6 +20,7 @@ class User(BaseModel):
     bio: Optional[str] = None
     city: Optional[str] = None
     province: Optional[str] = None
+    constituency: Optional[str] = None
     image_url: Optional[str] = None
     resume: Optional[str] = None
     ideas: Optional[str] = None
@@ -46,6 +47,7 @@ class CandidateCreate(BaseModel):
     bio: Optional[str] = None
     city: Optional[str] = None
     province: Optional[str] = None
+    constituency: Optional[str] = None
     image_url: Optional[str] = None
     resume: Optional[str] = None
     ideas: Optional[str] = None
@@ -66,6 +68,7 @@ class CandidateUpdate(BaseModel):
     bio: Optional[str] = None
     city: Optional[str] = None
     province: Optional[str] = None
+    constituency: Optional[str] = None
     image_url: Optional[str] = None
     is_active: Optional[bool] = None
     resume: Optional[str] = None
@@ -87,6 +90,7 @@ class Candidate(BaseModel):
     bio: Optional[str] = None
     city: Optional[str] = None
     province: Optional[str] = None
+    constituency: Optional[str] = None
     image_url: Optional[str] = None
     resume: Optional[str] = None
     ideas: Optional[str] = None
@@ -184,6 +188,120 @@ class Ticket(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     password: str = Field(min_length=4)
+
+# --- Bot Submissions (Feedback MVP) ---
+class FeedbackStatus(str):
+    pass
+
+
+class FeedbackSubmissionUpdate(BaseModel):
+    tag: Optional[str] = None
+    status: Optional[str] = None  # NEW | REVIEWED
+
+
+class FeedbackSubmission(BaseModel):
+    id: int
+    candidate_id: int
+    text: str
+    created_at: datetime
+    constituency: Optional[str] = None
+    status: str
+    tag: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class FeedbackTagStat(BaseModel):
+    tag: str
+    count: int
+    percent: float
+
+
+# --- Admin Dashboard (MVP) ---
+class AdminDashboardStats(BaseModel):
+    active_bots: int
+    total_questions: int
+    total_feedback: int
+    total_bot_requests: int
+
+
+class AdminCandidateStats(BaseModel):
+    candidate_id: int
+    total_questions: int
+    total_feedback: int
+    answered_questions: int
+
+
+class FeedbackStatsResponse(BaseModel):
+    days: int
+    total: int
+    items: List[FeedbackTagStat]
+
+# --- Public Questions (Q&A) ---
+
+class QuestionStatus:
+    PENDING = "PENDING"
+    ANSWERED = "ANSWERED"
+    REJECTED = "REJECTED"
+
+
+class QuestionSubmission(BaseModel):
+    id: int
+    candidate_id: int
+    text: str
+    topic: Optional[str] = None
+    constituency: Optional[str] = None
+    status: str
+    answer_text: Optional[str] = Field(None, alias="answer")
+    answered_at: Optional[datetime] = None
+    is_public: bool = False
+    is_featured: bool = False
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class QuestionSubmissionAnswer(BaseModel):
+    answer_text: str
+    topic: Optional[str] = None
+    is_featured: Optional[bool] = None
+
+
+class QuestionSubmissionMeta(BaseModel):
+    topic: Optional[str] = None
+    is_featured: Optional[bool] = None
+
+
+# --- Bot Build Requests (MVP) ---
+
+class BotRequestSubmission(BaseModel):
+    id: int
+    candidate_id: int
+    telegram_user_id: str
+    telegram_username: Optional[str] = None
+    requester_full_name: Optional[str] = None
+    requester_contact: Optional[str] = None
+    role: Optional[str] = Field(None, alias="topic")
+    constituency: Optional[str] = None
+    status: str
+    text: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class BotRequestUpdate(BaseModel):
+    status: str
+
+
+class QuestionSubmissionReject(BaseModel):
+    # No body required; keep schema for future extensibility
+    reason: Optional[str] = None
 
 # --- Announcement Schemas ---
 class AnnouncementCreate(BaseModel):

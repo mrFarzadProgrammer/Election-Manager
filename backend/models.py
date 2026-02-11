@@ -1,5 +1,5 @@
 # models.py
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime
@@ -24,6 +24,7 @@ class User(Base):
     bio = Column(String, nullable=True)
     city = Column(String, nullable=True)
     province = Column(String, nullable=True)
+    constituency = Column(String, nullable=True)
     image_url = Column(String, nullable=True)
     resume = Column(String, nullable=True)
     ideas = Column(String, nullable=True)
@@ -106,6 +107,132 @@ class BotUser(Base):
     last_name = Column(String, nullable=True)
     bot_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BotUserRegistry(Base):
+    __tablename__ = "bot_user_registry"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+
+    telegram_user_id = Column(String, index=True, nullable=False)
+    telegram_username = Column(String, nullable=True)
+    first_name = Column(String, nullable=True)
+    last_name = Column(String, nullable=True)
+    chat_type = Column(String, nullable=True)
+
+    candidate_name = Column(String, nullable=True)
+    candidate_bot_name = Column(String, nullable=True)
+    candidate_city = Column(String, nullable=True)
+    candidate_province = Column(String, nullable=True)
+    candidate_constituency = Column(String, nullable=True)
+
+    first_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "telegram_user_id", name="uq_bot_user_registry_candidate_telegram"),
+    )
+
+
+class BotSubmission(Base):
+    __tablename__ = "bot_submissions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+
+    telegram_user_id = Column(String, index=True, nullable=False)
+    telegram_username = Column(String, nullable=True)
+
+    # FEEDBACK | QUESTION | BOT_REQUEST
+    type = Column(String, index=True, nullable=False)
+    topic = Column(String, nullable=True)
+
+    # Snapshot of candidate constituency at submission time (for reporting)
+    constituency = Column(String, nullable=True)
+
+    # BOT_REQUEST structured fields (MVP)
+    requester_full_name = Column(String, nullable=True)
+    requester_contact = Column(String, nullable=True)
+
+    # Manual tag set by candidate/admin for analysis (nullable)
+    tag = Column(String, nullable=True)
+
+    text = Column(Text, nullable=False)
+    status = Column(String, default="NEW", index=True)
+    answer = Column(Text, nullable=True)
+
+    # Question publishing workflow
+    answered_at = Column(DateTime, nullable=True)
+    is_public = Column(Boolean, default=False)
+    is_featured = Column(Boolean, default=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BotQuestionVote(Base):
+    __tablename__ = "bot_question_votes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    submission_id = Column(Integer, ForeignKey("bot_submissions.id"), index=True, nullable=False)
+    telegram_user_id = Column(String, index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("submission_id", "telegram_user_id", name="uq_bot_question_vote_submission_user"),
+    )
+
+
+class BotSubmissionPublishLog(Base):
+    __tablename__ = "bot_submission_publish_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    submission_id = Column(Integer, ForeignKey("bot_submissions.id"), index=True, nullable=False)
+    published_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "submission_id", name="uq_bot_publishlog_candidate_submission"),
+    )
+
+
+class BotForumTopic(Base):
+    __tablename__ = "bot_forum_topics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    chat_id = Column(String, index=True, nullable=False)
+    category = Column(String, nullable=False)
+    thread_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "chat_id", "category", name="uq_bot_forumtopic_candidate_chat_category"),
+    )
+
+
+class BotCommitment(Base):
+    __tablename__ = "bot_commitments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+
+    # Optional stable key for special commitments (e.g., mandatory first commitment)
+    key = Column(String, nullable=True)
+
+    title = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+
+    status = Column(String, default="Active", nullable=False)
+    locked = Column(Boolean, default=True, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "key", name="uq_bot_commitment_candidate_key"),
+    )
 
 class Announcement(Base):
     __tablename__ = "announcements"
