@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, API_BASE } from '../../services/api';
+import { api } from '../../services/api';
 import { CandidateData, Plan, Ticket, Announcement } from '../../types';
 import { Users, CreditCard, MessageSquare, Megaphone, LogOut, LayoutDashboard, Menu, CheckSquare, User, Bot } from 'lucide-react';
 import CandidatesTab from './CandidatesTab';
@@ -59,50 +59,43 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
     }, []);
 
     const handleToggleStatus = async (id: string, currentStatus: boolean) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
+        const token = localStorage.getItem('access_token') || '';
         await api.updateCandidateStatus(id, !currentStatus, token);
         setCandidates(prev => prev.map(c => c.id === id ? { ...c, is_active: !currentStatus } : c));
     };
 
     const handleDeleteCandidate = async (id: string) => {
         if (!window.confirm('حذف کاندیدا؟')) return;
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
+        const token = localStorage.getItem('access_token') || '';
         await api.deleteCandidate(id, token);
         setCandidates(prev => prev.filter(c => c.id !== id));
     };
 
     const handleAddCandidate = async (data: any) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
+        const token = localStorage.getItem('access_token') || '';
         const newCandidate = await api.createCandidate(data, token);
         setCandidates(prev => [newCandidate as any, ...prev]);
     };
 
     const handleEditCandidate = async (id: string, data: any) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
+        const token = localStorage.getItem('access_token') || '';
         const updatedCandidate = await api.updateCandidate(parseInt(id), data, token);
         setCandidates(prev => prev.map(c => c.id === id ? { ...c, ...updatedCandidate as any } : c));
     };
 
     const handleResetPassword = async (id: string, password: string) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
+        const token = localStorage.getItem('access_token') || '';
         await api.updateCandidate(parseInt(id), { password }, token);
     };
 
     const handleAssignPlan = async (candidateId: string, planId: string) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
+        const token = localStorage.getItem('access_token') || '';
         await api.assignPlan(candidateId, planId, 30, token);
         setCandidates(prev => prev.map(c => c.id === candidateId ? { ...c, active_plan_id: planId } : c));
     };
 
     const handleSavePlan = async (planData: Partial<Plan>) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
+        const token = localStorage.getItem('access_token') || '';
 
         try {
             if (planData.id) {
@@ -120,35 +113,21 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
 
     const handleDeletePlan = async (id: string) => {
         if (!window.confirm('حذف پلن؟')) return;
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
+        const token = localStorage.getItem('access_token') || '';
         await api.deletePlan(id, token);
         setPlans(prev => prev.filter(p => p.id !== id));
     };
 
     const handleTicketReply = async (ticketId: string, message: string, attachment?: File) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
+        const token = localStorage.getItem('access_token') || '';
         setIsUploading(true);
         try {
             let attachmentUrl = undefined;
             let attachmentType = undefined;
             if (attachment) {
-                const formData = new FormData();
-                formData.append('file', attachment);
-
-                // Use api.uploadFile instead of direct fetch if possible, or keep direct fetch but use API_BASE
-                const res = await fetch(`${API_BASE}/api/upload`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` },
-                    body: formData
-                });
-
-                if (res.ok) {
-                    const data = await res.json();
-                    attachmentUrl = data.url;
-                    attachmentType = attachment.type.startsWith('image/') ? 'IMAGE' : 'FILE';
-                }
+                const data = await api.uploadFile(attachment, token);
+                attachmentUrl = data.url;
+                attachmentType = attachment.type.startsWith('image/') ? 'IMAGE' : 'FILE';
             }
 
             const newMsg = await api.addTicketMessage(ticketId, message || (attachment ? 'فایل پیوست' : ''), 'ADMIN', token, attachmentUrl, attachmentType as any);
@@ -181,30 +160,19 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
     };
 
     const handleSendAnnouncement = async (title: string, message: string, files: File[]) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) return;
+        const token = localStorage.getItem('access_token') || '';
         setIsUploading(true);
         try {
             const attachments: { url: string, type: string }[] = [];
 
             for (const file of files) {
-                const formData = new FormData();
-                formData.append('file', file);
-                const res = await fetch(`${API_BASE}/api/upload`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` },
-                    body: formData
-                });
+                const data = await api.uploadFile(file, token);
+                let type = 'FILE';
+                if (file.type.startsWith('image/')) type = 'IMAGE';
+                else if (file.type.startsWith('video/')) type = 'VIDEO';
+                else if (file.type.startsWith('audio/')) type = 'VOICE';
 
-                if (res.ok) {
-                    const data = await res.json();
-                    let type = 'FILE';
-                    if (file.type.startsWith('image/')) type = 'IMAGE';
-                    else if (file.type.startsWith('video/')) type = 'VIDEO';
-                    else if (file.type.startsWith('audio/')) type = 'VOICE';
-
-                    attachments.push({ url: data.url, type });
-                }
+                attachments.push({ url: data.url, type });
             }
 
             const newAnn = await api.createAnnouncement(title, message, attachments, token);

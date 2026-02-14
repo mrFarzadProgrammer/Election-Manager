@@ -4,7 +4,7 @@ import { Vote, User as UserIcon, Lock, ArrowRight } from 'lucide-react';
 import QuotesCarousel from './QuotesCarousel';
 
 interface LoginProps {
-    onLogin: (token: string, user: any) => void;
+    onLogin: (user: any) => void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
@@ -19,13 +19,14 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         setLoading(true);
 
         try {
-            const data = await api.login(username, password);
-            localStorage.setItem('access_token', data.access_token);
-            localStorage.setItem('refresh_token', data.refresh_token);
+            await api.login(username, password);
 
-            // Get user details
-            const user = await api.getMe(data.access_token);
-            onLogin(data.access_token, user);
+            // Prefer cookie-based session (HttpOnly tokens). Clear any legacy stored tokens.
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+
+            const user = await api.getMe('');
+            onLogin(user);
         } catch (err: any) {
             setError(err.message || "خطا در ورود به سیستم");
         } finally {

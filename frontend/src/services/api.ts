@@ -155,10 +155,53 @@ const normalizeRequestHeaders = (headers?: RequestInit["headers"]) => {
     return h;
 };
 
+const getCookie = (name: string): string | null => {
+    try {
+        if (typeof document === "undefined") return null;
+        const encoded = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${encoded}=([^;]*)`));
+        return match ? decodeURIComponent(match[1]) : null;
+    } catch {
+        return null;
+    }
+};
+
+const maybeAttachCsrfHeader = (headers: Headers, method: string) => {
+    const m = String(method || "GET").toUpperCase();
+    if (!["POST", "PUT", "PATCH", "DELETE"].includes(m)) return;
+    if (headers.has("X-CSRF-Token")) return;
+    const csrf = getCookie("csrf_token");
+    if (csrf) headers.set("X-CSRF-Token", csrf);
+};
+
 const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
+    try {
+        // Prefer cookie-based refresh (HttpOnly refresh_token cookie).
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        });
+
+        if (res.ok) {
+            const data = (await res.json()) as RefreshResponse;
+            if (data?.access_token) {
+                // Legacy compatibility: if the app is still using localStorage tokens, keep them updated.
+                if (localStorage.getItem("refresh_token")) {
+                    localStorage.setItem("access_token", data.access_token);
+                    if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
+                }
+                return data;
+            }
+        }
+    } catch {
+        // ignore
+    }
+
+    // Fallback: legacy refresh_token in localStorage.
     const refreshToken = localStorage.getItem("refresh_token");
     if (!refreshToken) return null;
-
     try {
         const res = await fetch(`${API_BASE}/api/auth/refresh`, {
             method: "POST",
@@ -181,9 +224,14 @@ const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
 async function request<T>(path: string, options: RequestInit = {}, _retried: boolean = false): Promise<T> {
     const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
 
+    const normalizedHeaders = normalizeRequestHeaders(options.headers);
+    const headers = new Headers(normalizedHeaders as any);
+    maybeAttachCsrfHeader(headers, options.method || "GET");
+
     const normalizedOptions: RequestInit = {
         ...options,
-        headers: normalizeRequestHeaders(options.headers),
+        credentials: options.credentials ?? "include",
+        headers,
     };
 
     let res: Response;
@@ -218,17 +266,25 @@ async function request<T>(path: string, options: RequestInit = {}, _retried: boo
     }
 
     if (!res.ok) {
-        // If access token expired, try refreshing once and retry the original request.
-        if (res.status === 401 && !_retried && hasAuthorizationHeader(normalizedOptions.headers)) {
+        // If session expired, try refreshing once and retry the original request.
+        const isAuthPath = /^\/api\/auth\//.test(path);
+        if (res.status === 401 && !_retried && !isAuthPath) {
+            const hadAuthHeader = hasAuthorizationHeader(normalizedOptions.headers);
             const refreshed = await refreshAccessToken();
+
             if (refreshed?.access_token) {
-                const nextHeaders = setAuthorizationHeader(normalizedOptions.headers, `Bearer ${refreshed.access_token}`);
-                return request<T>(path, { ...normalizedOptions, headers: nextHeaders }, true);
+                if (hadAuthHeader) {
+                    const nextHeaders = setAuthorizationHeader(normalizedOptions.headers, `Bearer ${refreshed.access_token}`);
+                    return request<T>(path, { ...normalizedOptions, headers: nextHeaders }, true);
+                }
+                // Cookie-based: refresh updates cookies; retry the same request.
+                return request<T>(path, normalizedOptions, true);
             }
 
-            // Refresh failed: treat as expired session.
-            localStorage.removeItem("access_token");
-            localStorage.removeItem("refresh_token");
+            if (hadAuthHeader) {
+                localStorage.removeItem("access_token");
+                localStorage.removeItem("refresh_token");
+            }
             throw new Error("نشست شما منقضی شده است. لطفاً دوباره وارد شوید.");
         }
 
@@ -249,9 +305,14 @@ async function request<T>(path: string, options: RequestInit = {}, _retried: boo
 async function requestBlob(path: string, options: RequestInit = {}, _retried: boolean = false): Promise<Blob> {
     const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
 
+    const normalizedHeaders = normalizeRequestHeaders(options.headers);
+    const headers = new Headers(normalizedHeaders as any);
+    maybeAttachCsrfHeader(headers, options.method || "GET");
+
     const normalizedOptions: RequestInit = {
         ...options,
-        headers: normalizeRequestHeaders(options.headers),
+        credentials: options.credentials ?? "include",
+        headers,
     };
 
     let res: Response;
@@ -262,14 +323,21 @@ async function requestBlob(path: string, options: RequestInit = {}, _retried: bo
     }
 
     if (!res.ok) {
-        if (res.status === 401 && !_retried && hasAuthorizationHeader(normalizedOptions.headers)) {
+        const isAuthPath = /^\/api\/auth\//.test(path);
+        if (res.status === 401 && !_retried && !isAuthPath) {
+            const hadAuthHeader = hasAuthorizationHeader(normalizedOptions.headers);
             const refreshed = await refreshAccessToken();
             if (refreshed?.access_token) {
-                const nextHeaders = setAuthorizationHeader(normalizedOptions.headers, `Bearer ${refreshed.access_token}`);
-                return requestBlob(path, { ...normalizedOptions, headers: nextHeaders }, true);
+                if (hadAuthHeader) {
+                    const nextHeaders = setAuthorizationHeader(normalizedOptions.headers, `Bearer ${refreshed.access_token}`);
+                    return requestBlob(path, { ...normalizedOptions, headers: nextHeaders }, true);
+                }
+                return requestBlob(path, normalizedOptions, true);
             }
-            localStorage.removeItem("access_token");
-            localStorage.removeItem("refresh_token");
+            if (hadAuthHeader) {
+                localStorage.removeItem("access_token");
+                localStorage.removeItem("refresh_token");
+            }
             throw new Error("نشست شما منقضی شده است. لطفاً دوباره وارد شوید.");
         }
 
@@ -416,14 +484,55 @@ export const api = {
         });
     },
 
-    getMe: async (token: string): Promise<User> => {
+    logout: async (): Promise<void> => {
+        await request<void>("/api/auth/logout", {
+            method: "POST",
+        });
+    },
+
+    getMe: async (token: string = ""): Promise<User> => {
+        const headers: Record<string, string> = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
         const user = await request<any>("/api/auth/me", {
             method: "GET",
-            headers: {
-                Authorization: `Bearer ${token}`,
-            },
+            headers,
         });
         return { ...user, id: String(user.id) };
+    },
+
+    uploadFile: async (
+        file: File,
+        token: string = "",
+        opts: { visibility?: "public" | "private" } = {}
+    ): Promise<{ url: string }> => {
+        const headers: Record<string, string> = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const form = new FormData();
+        form.append("file", file);
+        if (opts.visibility) form.append("visibility", opts.visibility);
+
+        return request<{ url: string }>("/api/upload", {
+            method: "POST",
+            headers,
+            body: form,
+        });
+    },
+
+    uploadVoiceIntro: async (
+        file: File,
+        token: string = "",
+        opts: { candidate_name?: string } = {}
+    ): Promise<{ url: string }> => {
+        const headers: Record<string, string> = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const form = new FormData();
+        form.append("file", file);
+        if (opts.candidate_name) form.append("candidate_name", opts.candidate_name);
+        return request<{ url: string }>("/api/upload/voice-intro", {
+            method: "POST",
+            headers,
+            body: form,
+        });
     },
 
     // ========== Admin Dashboard (MVP) ==========

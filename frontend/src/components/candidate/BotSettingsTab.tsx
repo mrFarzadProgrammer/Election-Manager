@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { CandidateData } from '../../types';
 import { Save, Clock, ShieldAlert, AlertTriangle, Bot, Image as ImageIcon, Upload, Text } from 'lucide-react';
 import BotPreview from '../BotPreview';
-import { api, API_BASE } from '../../services/api';
+import { api } from '../../services/api';
 
 interface BotSettingsTabProps {
     candidate: CandidateData;
@@ -93,25 +93,13 @@ const BotSettingsTab: React.FC<BotSettingsTabProps> = ({ candidate, onUpdate }) 
     };
 
     const handleSave = async () => {
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            alert('ابتدا وارد حساب کاربری شوید.');
-            return;
-        }
+        const token = localStorage.getItem('access_token') || '';
 
         setIsSaving(true);
         try {
             let image_url = candidate.image_url;
             if (imageFile) {
-                const fd = new FormData();
-                fd.append('file', imageFile);
-                const res = await fetch(`${API_BASE}/api/upload`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` },
-                    body: fd
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data?.detail?.message || data?.detail || 'آپلود تصویر ناموفق بود');
+                const data = await api.uploadFile(imageFile, token);
                 image_url = data.url;
             }
 

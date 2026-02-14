@@ -21,6 +21,19 @@ function App() {
 
   useEffect(() => {
     const initAuth = async () => {
+      // Prefer cookie-based session first.
+      try {
+        const userData = await api.getMe('');
+        setUser(userData);
+        setToken(null);
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        setLoading(false);
+        return;
+      } catch {
+        // fall back to legacy token-in-storage session
+      }
+
       const storedToken = localStorage.getItem('access_token');
       if (storedToken) {
         try {
@@ -42,17 +55,18 @@ function App() {
 
   useEffect(() => {
     const fetchData = async () => {
-      if (!user || !token) return;
+      if (!user) return;
+      const t = token || '';
 
       try {
         if (user.role === 'ADMIN') {
           // Fetch independently to avoid one failure blocking all
-          api.getCandidates(token).then(setCandidates).catch(e => console.error("Candidates fetch failed", e));
+          api.getCandidates(t).then(setCandidates).catch(e => console.error("Candidates fetch failed", e));
           api.getPlans().then(setPlans).catch(e => console.error("Plans fetch failed", e));
           api.getTickets().then(setTickets).catch(e => console.error("Tickets fetch failed", e));
         } else if (user.role === 'CANDIDATE') {
           // For candidate, we need to find their candidate profile
-          api.getCandidates(token).then(allCandidates => {
+          api.getCandidates(t).then(allCandidates => {
             const me = allCandidates.find(c => c.id === user.id);
             if (me) setCandidate(me);
           }).catch(e => console.error("Candidate profile fetch failed", e));
@@ -102,13 +116,16 @@ function App() {
     }
   }, [user, token, loading]);
 
-  const handleLogin = (newToken: string, newUser: User) => {
-    setToken(newToken);
+  const handleLogin = (newUser: User) => {
+    setToken(null);
     setUser(newUser);
     navigate('/');
   };
 
   const handleLogout = () => {
+    api.logout().catch(() => {
+      // ignore
+    });
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
     setToken(null);
@@ -200,11 +217,11 @@ function App() {
               <CandidatePanel
                 candidate={candidate}
                 onUpdate={async (updated) => {
-                  if (!user || !token) {
+                  if (!user) {
                     throw new Error('ابتدا وارد حساب کاربری شوید.');
                   }
                   const payload = pickCandidateUpdatePayload(updated as any);
-                  const saved = await api.updateCandidate(parseInt(String(user.id)), payload, token);
+                  const saved = await api.updateCandidate(parseInt(String(user.id)), payload, token || '');
                   setCandidate(saved as any);
                 }}
                 plans={plans}

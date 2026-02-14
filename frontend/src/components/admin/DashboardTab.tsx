@@ -17,11 +17,7 @@ const DashboardTab: React.FC<DashboardTabProps> = ({ candidates, plans, tickets,
 
     useEffect(() => {
         const run = async () => {
-            const token = localStorage.getItem('access_token');
-            if (!token) {
-                setError('ابتدا وارد حساب کاربری شوید.');
-                return;
-            }
+            const token = localStorage.getItem('access_token') || '';
 
             setLoading(true);
             setError(null);

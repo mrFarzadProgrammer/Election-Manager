@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CandidateData } from '../../../types';
 import { Mic, Save, Upload, Square, Trash2 } from 'lucide-react';
-import { API_BASE } from '../../../services/api';
+import { api } from '../../../services/api';
 import ResultModal, { ResultModalVariant } from '../ui/ResultModal';
 
 interface VoiceIntroV1Props {
@@ -364,11 +364,7 @@ const VoiceIntroV1: React.FC<VoiceIntroV1Props> = ({ candidate, onUpdate }) => {
     };
 
     const handleSave = async () => {
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
+        const token = localStorage.getItem('access_token') || '';
 
         if (isRecording) {
             setModal({ variant: 'warning', title: 'ضبط فعال است', message: 'ابتدا ضبط را متوقف کنید.' });
@@ -397,16 +393,9 @@ const VoiceIntroV1: React.FC<VoiceIntroV1Props> = ({ candidate, onUpdate }) => {
 
         setIsSaving(true);
         try {
-            const fd = new FormData();
-            fd.append('file', voiceFile);
-            fd.append('candidate_name', candidate?.name || candidate?.full_name || '');
-            const res = await fetch(`${API_BASE}/api/upload/voice-intro`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` },
-                body: fd,
+            const data = await api.uploadVoiceIntro(voiceFile, token, {
+                candidate_name: candidate?.name || candidate?.full_name || '',
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data?.detail?.message || data?.detail || 'آپلود فایل صوتی ناموفق بود');
 
             const voice_url = data.url;
             const bot_config = {

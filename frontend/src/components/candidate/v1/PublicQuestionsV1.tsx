@@ -41,11 +41,7 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
     const [modal, setModal] = useState<null | { variant: ResultModalVariant; title: string; message: string }>(null);
 
     const load = async () => {
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
+        const token = localStorage.getItem('access_token') || '';
 
         setIsLoading(true);
         try {
@@ -102,11 +98,7 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
     }, [items]);
 
     const answerOne = async (id: string) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
+        const token = localStorage.getItem('access_token') || '';
 
         const answer_text = (draftAnswers[id] || '').trim();
         if (!answer_text) {
@@ -128,11 +120,7 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
     };
 
     const saveMeta = async (id: string) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
+        const token = localStorage.getItem('access_token') || '';
 
         setIsSavingId(id);
         try {
@@ -148,11 +136,7 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
     };
 
     const rejectOne = async (id: string) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
+        const token = localStorage.getItem('access_token') || '';
 
         setIsSavingId(id);
         try {
@@ -284,8 +268,8 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
                                                         onClick={() => setDraftFeatured((prev) => ({ ...prev, [q.id]: !featuredValue }))}
                                                         disabled={isSaving}
                                                         className={`w-full px-3 py-2 rounded-2xl border text-sm transition ${featuredValue
-                                                                ? 'bg-green-50 border-green-200 text-green-700'
-                                                                : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                                                            ? 'bg-green-50 border-green-200 text-green-700'
+                                                            : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
                                                             }`}
                                                         title="سؤال‌های منتخب در بخش پرتکرار بات نمایش داده می‌شوند"
                                                     >

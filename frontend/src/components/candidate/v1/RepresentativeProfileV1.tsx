@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CandidateData } from '../../../types';
 import { Save, Upload, Image as ImageIcon, User } from 'lucide-react';
-import { API_BASE } from '../../../services/api';
+import { api } from '../../../services/api';
 import ResultModal, { ResultModalVariant } from '../ui/ResultModal';
 
 interface RepresentativeProfileV1Props {
@@ -68,11 +68,7 @@ const RepresentativeProfileV1: React.FC<RepresentativeProfileV1Props> = ({ candi
     };
 
     const handleSave = async () => {
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
+        const token = localStorage.getItem('access_token') || '';
 
         const trimmedSlogan = (slogan || '').trim();
         if (trimmedSlogan.length > MAX_SLOGAN) {
@@ -85,15 +81,7 @@ const RepresentativeProfileV1: React.FC<RepresentativeProfileV1Props> = ({ candi
             let image_url = candidate.image_url;
 
             if (imageFile) {
-                const fd = new FormData();
-                fd.append('file', imageFile);
-                const res = await fetch(`${API_BASE}/api/upload`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` },
-                    body: fd,
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data?.detail?.message || data?.detail || 'آپلود تصویر ناموفق بود');
+                const data = await api.uploadFile(imageFile, token);
                 image_url = data.url;
             }
 

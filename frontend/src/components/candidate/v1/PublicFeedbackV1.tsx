@@ -55,11 +55,7 @@ const PublicFeedbackV1: React.FC<PublicFeedbackV1Props> = ({ candidate }) => {
     const [modal, setModal] = useState<null | { variant: ResultModalVariant; title: string; message: string }>(null);
 
     const load = async () => {
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
+        const token = localStorage.getItem('access_token') || '';
 
         setIsLoading(true);
         try {
@@ -81,11 +77,7 @@ const PublicFeedbackV1: React.FC<PublicFeedbackV1Props> = ({ candidate }) => {
     const stats30 = useMemo(() => computeTagStats(items, 30), [items]);
 
     const updateSubmission = async (id: string, patch: { tag?: string | null; status?: 'NEW' | 'REVIEWED' }) => {
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
+        const token = localStorage.getItem('access_token') || '';
 
         setIsSavingId(id);
         try {

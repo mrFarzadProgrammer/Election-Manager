@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { CandidateData } from '../../types';
 import { Save, Bot, Mic, Image as ImageIcon, Upload } from 'lucide-react';
 import BotPreview from '../BotPreview';
-import { API_BASE } from '../../services/api';
+import { api } from '../../services/api';
 
 interface MediaTabProps {
     candidate: CandidateData;
@@ -43,11 +43,7 @@ const MediaTab: React.FC<MediaTabProps> = ({ candidate, onUpdate }) => {
     };
 
     const handleSave = async () => {
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            alert('ابتدا وارد حساب کاربری شوید.');
-            return;
-        }
+        const token = localStorage.getItem('access_token') || '';
 
         setIsSaving(true);
         try {
@@ -55,28 +51,12 @@ const MediaTab: React.FC<MediaTabProps> = ({ candidate, onUpdate }) => {
             let voice_url = formData.voice_url;
 
             if (imageFile) {
-                const fd = new FormData();
-                fd.append('file', imageFile);
-                const res = await fetch(`${API_BASE}/api/upload`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` },
-                    body: fd
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data?.detail?.message || data?.detail || 'آپلود تصویر ناموفق بود');
+                const data = await api.uploadFile(imageFile, token);
                 image_url = data.url;
             }
 
             if (voiceFile) {
-                const fd = new FormData();
-                fd.append('file', voiceFile);
-                const res = await fetch(`${API_BASE}/api/upload`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` },
-                    body: fd
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data?.detail?.message || data?.detail || 'آپلود فایل صوتی ناموفق بود');
+                const data = await api.uploadFile(voiceFile, token);
                 voice_url = data.url;
             }
 
