@@ -406,10 +406,14 @@ app.add_middleware(
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "no-referrer")
-    response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+    if "x-content-type-options" not in response.headers:
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    if "x-frame-options" not in response.headers:
+        response.headers["X-Frame-Options"] = "DENY"
+    if "referrer-policy" not in response.headers:
+        response.headers["Referrer-Policy"] = "no-referrer"
+    if "permissions-policy" not in response.headers:
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     return response
 
 @app.post("/api/upload")
@@ -417,7 +421,7 @@ async def upload_file(
     file: UploadFile = File(...),
     candidate_name: str | None = Form(None),
     current_user: models.User = Depends(auth.get_current_user),
-    request: Request = None,
+    request: Request,
 ):
     def _safe_part(value: str) -> str:
         v = (value or "").strip()
