@@ -16,6 +16,9 @@ venv/
 backend/venv/
 .env
 .env.*
+!.env.example
+!backend/.env.example
+!frontend/.env.example
 .pytest_cache/
 .mypy_cache/
 
