@@ -6,18 +6,21 @@ import signal
 import re
 from datetime import datetime, timedelta, timezone
 import os
-from urllib.parse import urlsplit
+import tempfile
+from urllib.parse import urlparse
 from typing import List
 from pathlib import Path
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+import jdatetime
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
 from telegram.error import NetworkError, TimedOut, RetryAfter
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from dotenv import load_dotenv
 from database import SessionLocal, Base, engine
-from models import User, BotUser, BotSubmission, BotUserRegistry, BotQuestionVote, BotSubmissionPublishLog, BotForumTopic, BotCommitment
+import models
+from models import User, BotUser, BotSubmission, BotUserRegistry
 
 # Configure logging
 logging.basicConfig(
@@ -37,43 +40,6 @@ try:
 except Exception:
     pass
 
-
-def _get_env(name: str) -> str | None:
-    """Read env var with a Windows registry fallback.
-
-    `setx` writes to the user's environment in the registry, but already-running
-    processes (VS Code / terminals) won't see it via `os.getenv()` until restarted.
-    This helper makes bot_runner pick up newly `setx`'d values without restarts.
-    """
-    value = os.getenv(name)
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-
-    if os.name != "nt":
-        return None
-
-    try:
-        import winreg  # type: ignore
-
-        for hive, subkey in (
-            (winreg.HKEY_CURRENT_USER, r"Environment"),
-            (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
-        ):
-            try:
-                with winreg.OpenKey(hive, subkey) as k:
-                    try:
-                        v, _ = winreg.QueryValueEx(k, name)
-                    except FileNotFoundError:
-                        continue
-                    if isinstance(v, str) and v.strip():
-                        return v.strip()
-            except OSError:
-                continue
-    except Exception:
-        return None
-
-    return None
-
 FAILED_BOT_COOLDOWN = timedelta(minutes=5)
 
 # Notify admin when a new BOT_REQUEST is submitted.
@@ -85,30 +51,316 @@ BOT_NOTIFY_ADMIN_CHAT_ID = (os.getenv("BOT_NOTIFY_ADMIN_CHAT_ID") or "").strip()
 Base.metadata.create_all(bind=engine)
 
 
-BTN_INTRO = "🏛 معرفی نماینده"
+# --- Telegram polling conflict (409) admin logging ---
+
+_last_409_logged_at_by_candidate: dict[int, datetime] = {}
+
+
+class _Telegram409ConflictHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = record.getMessage() or ""
+            if "terminated by other getUpdates request" not in msg and "telegram.error.Conflict" not in msg:
+                return
+
+            # Best-effort: apply to the current running candidate(s). In this runner we typically have a single
+            # candidate active locally, but we still rate-limit by candidate_id.
+            for cid, app in list(running_bots.items()):
+                if app is None:
+                    continue
+                last = _last_409_logged_at_by_candidate.get(int(cid))
+                now = datetime.utcnow()
+                if last and (now - last) < timedelta(minutes=10):
+                    continue
+                _last_409_logged_at_by_candidate[int(cid)] = now
+                log_technical_error_sync(
+                    service_name="telegram_bot",
+                    error_type="Conflict409",
+                    error_message=(
+                        "Telegram getUpdates 409 Conflict: another poller is running for this bot token. "
+                        "Stop other bot_runner instances and ensure only one machine/service polls this token."
+                    ),
+                    candidate_id=int(cid),
+                    telegram_user_id=None,
+                    state=None,
+                )
+        except Exception:
+            # Never break logging
+            return
+
+
+try:
+    _updater_logger = logging.getLogger("telegram.ext.Updater")
+    _updater_logger.addHandler(_Telegram409ConflictHandler())
+except Exception:
+    pass
+
+
+# --- Monitoring MVP helpers (DB-backed) ---
+
+def log_ux_sync(
+    *,
+    candidate_id: int,
+    telegram_user_id: str,
+    state: str | None,
+    action: str,
+    expected_action: str | None = None,
+) -> None:
+    """Best-effort UX/state-machine log."""
+    db: Session = SessionLocal()
+    try:
+        db.add(
+            models.BotUxLog(
+                candidate_id=int(candidate_id),
+                telegram_user_id=str(telegram_user_id),
+                state=state,
+                action=str(action),
+                expected_action=expected_action,
+                created_at=datetime.utcnow(),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
+def track_path_sync(*, candidate_id: int, path: str) -> None:
+    """Increment a Top-Paths counter for both candidate and global scopes."""
+
+    def _inc(db: Session, cid: int | None, p: str) -> None:
+        row = (
+            db.query(models.BotFlowPathCounter)
+            .filter(models.BotFlowPathCounter.candidate_id.is_(None) if cid is None else models.BotFlowPathCounter.candidate_id == int(cid))
+            .filter(models.BotFlowPathCounter.path == str(p))
+            .first()
+        )
+        if row is None:
+            row = models.BotFlowPathCounter(candidate_id=cid, path=str(p), count=0, updated_at=datetime.utcnow())
+            db.add(row)
+        row.count = int(row.count or 0) + 1
+        row.updated_at = datetime.utcnow()
+
+    db = SessionLocal()
+    try:
+        _inc(db, int(candidate_id), path)
+        _inc(db, None, path)
+        db.commit()
+    finally:
+        db.close()
+
+
+def log_technical_error_sync(
+    *,
+    service_name: str,
+    error_type: str,
+    error_message: str,
+    telegram_user_id: str | None = None,
+    candidate_id: int | None = None,
+    state: str | None = None,
+) -> None:
+    """Best-effort technical error log."""
+    db: Session = SessionLocal()
+    try:
+        db.add(
+            models.TechnicalErrorLog(
+                service_name=str(service_name),
+                error_type=str(error_type),
+                error_message=str(error_message)[:4000],
+                telegram_user_id=str(telegram_user_id) if telegram_user_id is not None else None,
+                candidate_id=int(candidate_id) if candidate_id is not None else None,
+                state=state,
+                created_at=datetime.utcnow(),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
+def track_flow_event_sync(*, candidate_id: int, flow_type: str, event: str) -> None:
+    """Increment flow drop counters (started/completed/abandoned)."""
+    event = str(event).strip().lower()
+    if event not in {"flow_started", "flow_completed", "flow_abandoned"}:
+        return
+
+    db: Session = SessionLocal()
+    try:
+        row = (
+            db.query(models.BotFlowDropCounter)
+            .filter(models.BotFlowDropCounter.candidate_id == int(candidate_id))
+            .filter(models.BotFlowDropCounter.flow_type == str(flow_type))
+            .first()
+        )
+        if row is None:
+            row = models.BotFlowDropCounter(
+                candidate_id=int(candidate_id),
+                flow_type=str(flow_type),
+                started_count=0,
+                completed_count=0,
+                abandoned_count=0,
+                updated_at=datetime.utcnow(),
+            )
+            db.add(row)
+
+        if event == "flow_started":
+            row.started_count = int(row.started_count or 0) + 1
+        elif event == "flow_completed":
+            row.completed_count = int(row.completed_count or 0) + 1
+        else:
+            row.abandoned_count = int(row.abandoned_count or 0) + 1
+
+        row.updated_at = datetime.utcnow()
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
+async def health_check_loop(application: Application, *, candidate_id: int) -> None:
+    """Periodic lightweight health checks (1–5 min).
+
+    Stored historically in BotHealthCheck.
+    """
+
+    def _clamp(v: int, lo: int, hi: int) -> int:
+        return max(lo, min(hi, v))
+
+    raw = (os.getenv("MONITOR_HEALTH_INTERVAL_SEC") or "").strip()
+    try:
+        interval = int(raw) if raw else 60
+    except Exception:
+        interval = 60
+    interval = _clamp(interval, 60, 300)
+
+    chat_id_raw = (os.getenv("HEALTHCHECK_CHAT_ID") or "").strip()
+    health_chat_id: int | None = None
+    if chat_id_raw:
+        try:
+            health_chat_id = int(chat_id_raw)
+        except Exception:
+            health_chat_id = None
+
+    while True:
+        now = datetime.now(timezone.utc)
+
+        # 1) DB reachable
+        db: Session = SessionLocal()
+        try:
+            ok = True
+            try:
+                db.execute(func.now())
+            except Exception:
+                ok = False
+
+            db.add(
+                models.BotHealthCheck(
+                    candidate_id=int(candidate_id),
+                    check_type="database_reachable",
+                    status="ok" if ok else "failed",
+                    created_at=datetime.utcnow(),
+                )
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+
+        # 2) Can receive updates (heuristic): have we observed updates recently?
+        try:
+            last = application.bot_data.get("last_update_received_at")
+            threshold_sec = max(interval * 2, 180)
+            recv_ok = bool(last and isinstance(last, datetime) and (now - last.replace(tzinfo=timezone.utc)).total_seconds() <= threshold_sec)
+
+            db2: Session = SessionLocal()
+            try:
+                db2.add(
+                    models.BotHealthCheck(
+                        candidate_id=int(candidate_id),
+                        check_type="bot_can_receive_updates",
+                        status="ok" if recv_ok else "failed",
+                        created_at=datetime.utcnow(),
+                    )
+                )
+                db2.commit()
+            except Exception:
+                db2.rollback()
+            finally:
+                db2.close()
+        except Exception:
+            pass
+
+        # 3) Can send message (optional): only if HEALTHCHECK_CHAT_ID configured.
+        if health_chat_id is not None:
+            send_ok = True
+            try:
+                await application.bot.send_chat_action(chat_id=health_chat_id, action="typing")
+            except Exception:
+                send_ok = False
+
+            db3: Session = SessionLocal()
+            try:
+                db3.add(
+                    models.BotHealthCheck(
+                        candidate_id=int(candidate_id),
+                        check_type="bot_can_send_message",
+                        status="ok" if send_ok else "failed",
+                        created_at=datetime.utcnow(),
+                    )
+                )
+                db3.commit()
+            except Exception:
+                db3.rollback()
+            finally:
+                db3.close()
+
+        await asyncio.sleep(interval)
+
+
+BTN_INTRO = "🤖 معرفی نماینده"
 BTN_PROGRAMS = "✅ برنامه‌ها"
 BTN_FEEDBACK = "💬 نظر / دغدغه"
 BTN_FEEDBACK_LEGACY = "✍️ ارسال نظر / دغدغه"
 BTN_QUESTION = "❓ سؤال از نماینده"
-BTN_CONTACT = "📍 آدرس ستادها"
+BTN_CONTACT = "☎️ ارتباط با نماینده"
+
+# UX-first main menu (max 5 buttons)
 BTN_COMMITMENTS = "📜 تعهدات نماینده"
 BTN_ABOUT_MENU = "📂 درباره نماینده"
 BTN_OTHER_MENU = "⚙️ سایر امکانات"
-BTN_BUILD_BOT = "🛠 ساخت بات اختصاصی"
 
+# Submenus
+BTN_ABOUT_INTRO = "🏛 معرفی نماینده"
+BTN_HQ_ADDRESSES = "📍 آدرس ستادها"
+BTN_VOICE_INTRO = "🎙 معرفی صوتی نماینده"
+
+BTN_BUILD_BOT = "🛠 ساخت بات اختصاصی"
 BTN_ABOUT_BOT = "ℹ️ درباره این بات"
 
 BTN_PROFILE_SUMMARY = "👤 سوابق"
-BTN_VOICE_INTRO = "🎙 معرفی صوتی"
 BTN_BACK = "🔙 بازگشت"
 
-# Fixed categories (MVP - strict)
+BTN_REGISTER_QUESTION = "✅ ثبت سؤال"
+BTN_SEARCH_QUESTION = "🔍 جستجو در پرسش‌ها"
+
+# Strict step-based question UX (MVP)
+BTN_VIEW_QUESTIONS = "👀 مشاهده سؤال‌ها"
+BTN_ASK_NEW_QUESTION = "✍️ ثبت سؤال جدید"
+BTN_VIEW_BY_CATEGORY = "📂 دسته‌بندی‌ها"
+BTN_VIEW_BY_SEARCH = "🔎 جستجو"
+BTN_SELECT_TOPIC = "▶️ انتخاب موضوع"
+
+# Fixed categories (MVP)
 QUESTION_CATEGORIES: list[str] = [
-    "اقتصاد",
     "اشتغال",
-    "مسکن",
+    "اقتصاد و معیشت",
     "شفافیت",
-    "مسائل محلی",
+    "مسکن",
 ]
 
 BTN_BOT_REQUEST = "✅ درخواست ساخت بات اختصاصی"
@@ -117,27 +369,72 @@ ROLE_REPRESENTATIVE = "نماینده"
 ROLE_CANDIDATE = "کاندیدا"
 ROLE_TEAM = "تیم"
 
-# --- Mandatory state machine (strict) ---
-STATE_IDLE = "idle"
-STATE_QUESTION_CATEGORY = "question_category"
-STATE_QUESTION_TEXT = "question_text"
-STATE_FEEDBACK_TEXT = "feedback_text"
-STATE_LEAD_ROLE = "lead_role"
-STATE_LEAD_CONTACT_CHOICE = "lead_contact_choice"
-STATE_DONE = "done"
+STATE_MAIN = "MAIN"
+STATE_ABOUT_MENU = "ABOUT_MENU"
+STATE_OTHER_MENU = "OTHER_MENU"
+STATE_COMMITMENTS_VIEW = "COMMITMENTS_VIEW"
+STATE_PROGRAMS = "PROGRAMS"
+STATE_FEEDBACK_TEXT = "FEEDBACK_TEXT"
+STATE_QUESTION_TEXT = "QUESTION_TEXT"
+STATE_QUESTION_MENU = "QUESTION_MENU"
+STATE_QUESTION_SEARCH = "QUESTION_SEARCH"
+STATE_QUESTION_CATEGORY = "QUESTION_CATEGORY"
+
+# Strict step-based states (preferred)
+STATE_QUESTION_ENTRY = "QUESTION_ENTRY"
+STATE_QUESTION_VIEW_METHOD = "QUESTION_VIEW_METHOD"
+STATE_QUESTION_VIEW_CATEGORY = "QUESTION_VIEW_CATEGORY"
+STATE_QUESTION_VIEW_LIST = "QUESTION_VIEW_LIST"
+STATE_QUESTION_VIEW_ANSWER = "QUESTION_VIEW_ANSWER"
+STATE_QUESTION_VIEW_RESULTS = "QUESTION_VIEW_RESULTS"
+STATE_QUESTION_VIEW_SEARCH_TEXT = "QUESTION_VIEW_SEARCH_TEXT"
+STATE_QUESTION_ASK_ENTRY = "QUESTION_ASK_ENTRY"
+STATE_QUESTION_ASK_TOPIC = "QUESTION_ASK_TOPIC"
+STATE_QUESTION_ASK_TEXT = "QUESTION_ASK_TEXT"
+
+STATE_BOTREQ_NAME = "BOTREQ_NAME"
+STATE_BOTREQ_ROLE = "BOTREQ_ROLE"
+STATE_BOTREQ_CONSTITUENCY = "BOTREQ_CONSTITUENCY"
+STATE_BOTREQ_CONTACT = "BOTREQ_CONTACT"
 
 
-def build_bot_request_role_keyboard() -> ReplyKeyboardMarkup:
+def _flow_type_from_state(state: str | None) -> str | None:
+    s = (state or "").strip()
+    if s in {STATE_FEEDBACK_TEXT}:
+        return "comment"
+    if s in {
+        STATE_QUESTION_TEXT,
+        STATE_QUESTION_MENU,
+        STATE_QUESTION_SEARCH,
+        STATE_QUESTION_CATEGORY,
+        STATE_QUESTION_ENTRY,
+        STATE_QUESTION_VIEW_METHOD,
+        STATE_QUESTION_VIEW_CATEGORY,
+        STATE_QUESTION_VIEW_LIST,
+        STATE_QUESTION_VIEW_ANSWER,
+        STATE_QUESTION_VIEW_RESULTS,
+        STATE_QUESTION_VIEW_SEARCH_TEXT,
+        STATE_QUESTION_ASK_ENTRY,
+        STATE_QUESTION_ASK_TOPIC,
+        STATE_QUESTION_ASK_TEXT,
+    }:
+        return "question"
+    if s in {STATE_BOTREQ_NAME, STATE_BOTREQ_ROLE, STATE_BOTREQ_CONSTITUENCY, STATE_BOTREQ_CONTACT}:
+        return "lead"
+    return None
+
+
+def build_bot_request_cta_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [[KeyboardButton(ROLE_REPRESENTATIVE), KeyboardButton(ROLE_CANDIDATE), KeyboardButton(ROLE_TEAM)], [KeyboardButton(BTN_BACK)]],
+        [[KeyboardButton(BTN_BOT_REQUEST)], [KeyboardButton(BTN_BACK)]],
         resize_keyboard=True,
         is_persistent=True,
     )
 
 
-def build_lead_contact_choice_keyboard() -> ReplyKeyboardMarkup:
+def build_bot_request_role_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("☎️ شماره تماس"), KeyboardButton("💬 آیدی تلگرام")], [KeyboardButton(BTN_BACK)]],
+        [[KeyboardButton(ROLE_REPRESENTATIVE), KeyboardButton(ROLE_CANDIDATE), KeyboardButton(ROLE_TEAM)], [KeyboardButton(BTN_BACK)]],
         resize_keyboard=True,
         is_persistent=True,
     )
@@ -155,15 +452,15 @@ FEEDBACK_INTRO_TEXT = """نظر یا دغدغه‌ات اینجا ثبت می‌
 
 پاسخ‌ها به‌صورت کلی و عمومی ارائه می‌شود، نه فردی.
 اگر سؤال مشخصی داری که انتظار پاسخ مستقیم داری،
-از بخش «❓ سؤال از نماینده» استفاده کن (پاسخ‌ها عمومی منتشر می‌شوند)."""
+از بخش «❓ سؤال از نماینده» استفاده کن."""
 
 
 def build_main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton(BTN_QUESTION)],
-            [KeyboardButton(BTN_COMMITMENTS)],
-            [KeyboardButton(BTN_FEEDBACK), KeyboardButton(BTN_ABOUT_MENU)],
+            # Swap order to match expected right-to-left visual placement in Telegram.
+            [KeyboardButton(BTN_COMMITMENTS), KeyboardButton(BTN_QUESTION)],
+            [KeyboardButton(BTN_ABOUT_MENU), KeyboardButton(BTN_FEEDBACK)],
             [KeyboardButton(BTN_OTHER_MENU)],
         ],
         resize_keyboard=True,
@@ -174,8 +471,8 @@ def build_main_keyboard() -> ReplyKeyboardMarkup:
 def build_about_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton(BTN_INTRO), KeyboardButton(BTN_PROGRAMS)],
-            [KeyboardButton(BTN_CONTACT), KeyboardButton(BTN_VOICE_INTRO)],
+            [KeyboardButton(BTN_PROGRAMS), KeyboardButton(BTN_ABOUT_INTRO)],
+            [KeyboardButton(BTN_VOICE_INTRO), KeyboardButton(BTN_HQ_ADDRESSES)],
             [KeyboardButton(BTN_BACK)],
         ],
         resize_keyboard=True,
@@ -186,8 +483,8 @@ def build_about_keyboard() -> ReplyKeyboardMarkup:
 def build_other_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton(BTN_ABOUT_BOT)],
             [KeyboardButton(BTN_BUILD_BOT)],
+            [KeyboardButton(BTN_ABOUT_BOT)],
             [KeyboardButton(BTN_BACK)],
         ],
         resize_keyboard=True,
@@ -195,114 +492,255 @@ def build_other_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def _current_idle_keyboard(context: ContextTypes.DEFAULT_TYPE) -> ReplyKeyboardMarkup:
-    menu = (context.user_data.get("idle_menu") or "main").strip().lower()
-    if menu == "about":
-        return build_about_keyboard()
-    if menu == "other":
-        return build_other_keyboard()
-    return build_main_keyboard()
-
-
-def _is_bot_admin(update: Update) -> bool:
-    """Best-effort bot-admin check for write actions in the bot UI."""
-    user = getattr(update, "effective_user", None)
-    if user is None:
-        return False
-    uid = str(getattr(user, "id", "") or "").strip()
-    uname = str(getattr(user, "username", "") or "").lstrip("@").strip().lower()
-    if BOT_NOTIFY_ADMIN_CHAT_ID and uid and uid == str(BOT_NOTIFY_ADMIN_CHAT_ID).strip():
-        return True
-    if BOT_NOTIFY_ADMIN_USERNAME and uname and uname == str(BOT_NOTIFY_ADMIN_USERNAME).lstrip("@").strip().lower():
-        return True
-    return False
-
-
-def _commitments_banner_md() -> str:
-    return "🛡 *اطلاع‌رسانی عمومی*\nتمام تعهدات ثبت‌شده غیرقابل ویرایش و دائمی هستند."
-
-
-def _safe_md_text(s: str) -> str:
-    # Minimal escaping for classic Telegram Markdown.
-    # We mostly use code blocks to avoid formatting issues.
-    return (s or "").replace("*", "⋆").replace("_", "﹍").replace("[`", "[").replace("]`", "]")
-
-
-def _format_commitment_pre_md(title: str, body: str, created_at: datetime | None, status: str, locked: bool) -> str:
-    created_str = "-"
-    if isinstance(created_at, datetime):
-        created_str = created_at.strftime("%Y-%m-%d %H:%M")
-    lock_icon = "🔒" if locked else ""
-    safe_title = _safe_md_text((title or "").strip())
-    safe_body = _safe_md_text((body or "").strip())
-    safe_status = _safe_md_text((status or "").strip() or "Active")
-    block = (
-        f"{lock_icon} {safe_title}\n"
-        f"🕒 {created_str}\n"
-        f"📌 وضعیت: {safe_status}\n"
-        f"\n{safe_body}"
-    ).strip()
-    # Prefer code block for preformatted rendering.
-    block = block.replace("```", "``\u200b`")
-    return f"```\n{block}\n```"
-
-
-def _first_commitment_keyboard() -> InlineKeyboardMarkup:
-    # Telegram doesn't support true colored buttons for callbacks; we highlight by ordering + ✅.
-    options = [
-        ("همین بات رسمی ✅", "official_bot"),
-        ("ستادهای حضوری", "in_person"),
-        ("تماس تلفنی", "phone"),
-        ("شبکه‌های اجتماعی", "socials"),
-        ("ترکیبی", "mixed"),
-    ]
-    rows = [[InlineKeyboardButton(text, callback_data=f"commit:first:{key}")] for text, key in options]
-    return InlineKeyboardMarkup(rows)
-
-
 def build_back_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True, is_persistent=True)
 
 
-def build_question_category_keyboard() -> ReplyKeyboardMarkup:
+def build_question_hub_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard for browsing featured/category/search + registering a new question."""
     rows: list[list[KeyboardButton]] = []
-    buttons = [KeyboardButton(c) for c in QUESTION_CATEGORIES]
+    # Categories as two-column buttons
+    cat_buttons = [KeyboardButton(f"🗂 {c}") for c in QUESTION_CATEGORIES]
+    for i in range(0, len(cat_buttons), 2):
+        rows.append(cat_buttons[i : i + 2])
+    rows.append([KeyboardButton(BTN_SEARCH_QUESTION), KeyboardButton(BTN_REGISTER_QUESTION)])
+    rows.append([KeyboardButton(BTN_BACK)])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
+
+
+def build_question_entry_keyboard() -> ReplyKeyboardMarkup:
+    """Question entry screen."""
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(BTN_VIEW_QUESTIONS)], [KeyboardButton(BTN_ASK_NEW_QUESTION)], [KeyboardButton(BTN_BACK)]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def build_question_view_method_keyboard() -> ReplyKeyboardMarkup:
+    """SCREEN 2A: View flow entry (method choice)."""
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(BTN_VIEW_BY_CATEGORY), KeyboardButton(BTN_VIEW_BY_SEARCH)], [KeyboardButton(BTN_BACK)]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def build_question_ask_entry_keyboard() -> ReplyKeyboardMarkup:
+    """SCREEN 2B: Ask flow entry (go to topic selection)."""
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(BTN_SELECT_TOPIC)], [KeyboardButton(BTN_BACK)]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def build_question_categories_keyboard(*, prefix_icon: bool, include_back: bool) -> ReplyKeyboardMarkup:
+    """SCREEN 3 (Ask) and View-by-category selector.
+
+    - Ask flow: prefix_icon=True (uses 🗂 prefix)
+    - View flow: prefix_icon=True (uses 🗂 prefix)
+    """
+    rows: list[list[KeyboardButton]] = []
+    if prefix_icon:
+        buttons = [KeyboardButton(f"🗂 {c}") for c in QUESTION_CATEGORIES]
+    else:
+        buttons = [KeyboardButton(c) for c in QUESTION_CATEGORIES]
+
+    for i in range(0, len(buttons), 2):
+        rows.append(buttons[i : i + 2])
+    if include_back:
+        rows.append([KeyboardButton(BTN_BACK)])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
+
+
+def build_question_list_keyboard(items: list[dict]) -> ReplyKeyboardMarkup:
+    """Build a keyboard of questions for a chosen category.
+
+    Each button starts with `N)` so we can parse it reliably.
+    """
+    rows: list[list[KeyboardButton]] = []
+    buttons: list[KeyboardButton] = []
+    for idx, it in enumerate(items, start=1):
+        q = _normalize_text(it.get("q") or "")
+        q = re.sub(r"\s+", " ", q).strip()
+        if len(q) > 48:
+            q = q[:47] + "…"
+        buttons.append(KeyboardButton(f"{idx}) {q}" if q else f"{idx})"))
+
     for i in range(0, len(buttons), 2):
         rows.append(buttons[i : i + 2])
     rows.append([KeyboardButton(BTN_BACK)])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
-def build_vote_inline_keyboard(submission_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("👍 این سؤال برای من مهم است", callback_data=f"vote:{int(submission_id)}")]]
-    )
-
-
-def _question_code(candidate_bot_config: dict, submission_id: int) -> str:
-    prefix = "MA"
-    if isinstance(candidate_bot_config, dict):
-        v = _normalize_text(candidate_bot_config.get("question_code_prefix") or candidate_bot_config.get("questionCodePrefix"))
-        if v:
-            prefix = v
-    return f"{prefix}-{int(submission_id):03d}"
-
-
-def _vote_threshold(candidate_bot_config: dict) -> int:
-    if not isinstance(candidate_bot_config, dict):
-        return 10
-    raw = candidate_bot_config.get("vote_threshold") or candidate_bot_config.get("voteThreshold")
+def _parse_question_list_choice(user_text: str | None) -> int | None:
+    t = _normalize_button_text(user_text)
+    m = re.match(r"^(\d{1,2})\)", t)
+    if not m:
+        # also accept plain number input
+        if re.fullmatch(r"\d{1,3}", t):
+            try:
+                return int(t)
+            except Exception:
+                return None
+        return None
     try:
-        v = int(raw)
-        return v if v > 0 else 10
+        return int(m.group(1))
     except Exception:
-        return 10
+        return None
+
+
+def _to_fa_digits(value: str) -> str:
+    trans = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+    return str(value).translate(trans)
+
+
+def _to_jalali_date_ymd(dt: datetime | None) -> str:
+    if not dt:
+        return ""
+    try:
+        if isinstance(dt, datetime):
+            # Normalize tz-aware -> naive
+            if getattr(dt, "tzinfo", None) is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        jd = jdatetime.date.fromgregorian(date=dt.date())
+        return _to_fa_digits(jd.strftime("%Y/%m/%d"))
+    except Exception:
+        try:
+            return _to_fa_digits(dt.strftime("%Y/%m/%d"))
+        except Exception:
+            return ""
+
+
+def _format_public_question_answer_block(*, topic: str | None, question: str, answer: str, answered_at: datetime | None) -> str:
+    t = _normalize_text(topic)
+    q = _normalize_text(question)
+    a = _normalize_text(answer)
+    date_line = _to_jalali_date_ymd(answered_at)
+
+    parts: list[str] = []
+    if t:
+        parts.append(f"🏷 {t}")
+    parts.append(f"❓ {q}")
+    parts.append("\n━━━━━━━━━━━━\n✅ پاسخ رسمی نماینده\n\n" + a)
+    if date_line:
+        parts.append(f"📅 {date_line}")
+    return "\n\n".join([p for p in parts if p]).strip()
+
+
+async def _send_question_list_message(*, update_message, topic: str, items: list[dict]):
+    """Send all questions for a topic as numbered text (chunked) + Back keyboard.
+
+    This avoids Telegram reply-keyboard limits when a category has many questions.
+    """
+    header = f"🗂 {topic}\n\nتمام سؤال‌های این بخش (شماره را ارسال کنید):\n"
+    lines: list[str] = []
+    for idx, it in enumerate(items, start=1):
+        q = _normalize_text(it.get("q") or "")
+        q = re.sub(r"\s+", " ", q).strip()
+        if q:
+            lines.append(f"{idx}) {q}")
+        else:
+            lines.append(f"{idx})")
+
+    # Telegram message text has a practical limit; chunk safely.
+    max_len = 3500
+    chunks: list[str] = []
+    current = header
+    for ln in lines:
+        candidate = (current + "\n" + ln) if current else ln
+        if len(candidate) > max_len and current:
+            chunks.append(current)
+            current = ln
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+
+    for i, ch in enumerate(chunks):
+        rm = build_back_keyboard() if i == len(chunks) - 1 else None
+        await safe_reply_text(update_message, ch, reply_markup=rm)
+
+
+async def _send_question_answers_message(*, update_message, topic: str, items: list[dict]):
+    """Send all Q&A for a topic as text (chunked) + Back keyboard."""
+    blocks: list[str] = []
+    for it in items:
+        q = _normalize_text(it.get("q") or "")
+        a = _normalize_text(it.get("a") or "")
+        answered_at = it.get("answered_at")
+        if q and a:
+            blocks.append(
+                _format_public_question_answer_block(
+                    topic=topic,
+                    question=q,
+                    answer=a,
+                    answered_at=answered_at if isinstance(answered_at, datetime) else None,
+                )
+            )
+
+    if not blocks:
+        await safe_reply_text(
+            update_message,
+            f"🗂 {topic}\n\nفعلاً پاسخ عمومی برای این دسته ثبت نشده است.",
+            reply_markup=build_back_keyboard(),
+        )
+        return
+
+    max_len = 3500
+    chunks: list[str] = []
+    current = ""
+    for blk in blocks:
+        candidate = (current + "\n\n" + blk) if current else blk
+        if len(candidate) > max_len and current:
+            chunks.append(current)
+            current = blk
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+
+    for i, ch in enumerate(chunks):
+        rm = build_back_keyboard() if i == len(chunks) - 1 else None
+        await safe_reply_text(update_message, ch, reply_markup=rm)
 
 
 def _normalize_text(value) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _normalize_button_text(value: str | None) -> str:
+    """Normalize Telegram button text for robust comparisons.
+
+    Telegram (and Persian keyboards) can introduce ZWNJ (\u200c) and subtle whitespace.
+    We normalize those so button routing doesn't break after restarts.
+    """
+    v = _normalize_text(value)
+    v = v.replace("\u200c", "").replace("\u200f", "").replace("\ufeff", "")
+    v = re.sub(r"\s+", " ", v).strip()
+    return v
+
+
+def _btn_eq(user_text: str | None, target: str) -> bool:
+    return _normalize_button_text(user_text) == _normalize_button_text(target)
+
+
+def _btn_has(user_text: str | None, *needles: str) -> bool:
+    t = _normalize_button_text(user_text)
+    for n in needles:
+        nn = _normalize_button_text(n)
+        if nn and nn in t:
+            return True
+    return False
+
+
+def _is_back(user_text: str | None) -> bool:
+    # Some Telegram clients may alter emoji presentation; match by both exact
+    # button value and common Persian keywords.
+    return _btn_eq(user_text, BTN_BACK) or _btn_has(user_text, "بازگشت", "برگشت")
 
 
 async def safe_reply_text(message, text: str, **kwargs):
@@ -496,7 +934,52 @@ def _save_submission_sync(
         db.close()
 
 
-LOCK_FILENAME = ".bot_runner.lock"
+LOCK_FILENAME = "election_manager_bot_runner.lock"
+
+_WIN_MUTEX_HANDLE = None
+_WIN_LOCK_FILE = None
+
+
+def _env_truthy(name: str) -> bool:
+    v = (os.getenv(name) or "").strip().lower()
+    return v in {"1", "true", "yes", "y", "on"}
+
+
+_AUTO_TRUST_ENV_DECISION: bool | None = None
+
+
+def _auto_decide_trust_env_for_telegram() -> bool:
+    """Best-effort selection for httpx trust_env.
+
+    Some environments can reach Telegram directly (no proxy needed) but also have
+    system proxy env vars that are flaky for long polling. Others require the system
+    proxy to reach Telegram at all.
+
+    If TELEGRAM_TRUST_ENV is explicitly set, we honor it elsewhere.
+    """
+    global _AUTO_TRUST_ENV_DECISION
+    if _AUTO_TRUST_ENV_DECISION is not None:
+        return _AUTO_TRUST_ENV_DECISION
+
+    try:
+        import httpx
+
+        with httpx.Client(trust_env=False, timeout=5.0, follow_redirects=True) as client:
+            client.get("https://api.telegram.org")
+
+        # Direct connectivity works; avoid system proxies by default.
+        _AUTO_TRUST_ENV_DECISION = False
+    except Exception:
+        # Direct connectivity failed; fall back to system proxy env.
+        _AUTO_TRUST_ENV_DECISION = True
+
+    return _AUTO_TRUST_ENV_DECISION
+
+
+def _default_lock_path() -> str:
+    # Use a stable, machine-wide lock path so multiple repo copies don't spawn multiple pollers.
+    # On Windows this resolves to something like: C:\Users\<user>\AppData\Local\Temp\...
+    return os.path.join(tempfile.gettempdir(), LOCK_FILENAME)
 
 
 def _is_pid_running(pid: int) -> bool:
@@ -528,7 +1011,20 @@ def _is_pid_running(pid: int) -> bool:
 
             h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
             if not h:
-                return False
+                # If we cannot open the process due to permissions, assume it is running.
+                # This avoids incorrectly treating the lock as stale and starting a second poller.
+                try:
+                    err = int(ctypes.get_last_error())
+                except Exception:
+                    err = 0
+
+                ERROR_INVALID_PARAMETER = 87  # typically means PID does not exist
+                ERROR_ACCESS_DENIED = 5
+                if err == ERROR_INVALID_PARAMETER:
+                    return False
+                if err == ERROR_ACCESS_DENIED:
+                    return True
+                return True
             try:
                 code = wintypes.DWORD(0)
                 ok = GetExitCodeProcess(h, ctypes.byref(code))
@@ -556,6 +1052,131 @@ def acquire_single_instance_lock(lock_path: str) -> None:
 
     Multiple pollers for the same Telegram token cause 409 Conflict and make the bot appear 'inactive'.
     """
+    # Windows: use an actual OS-level file lock to avoid unreliable PID checks and
+    # cross-session permission issues.
+    if os.name == "nt":
+        try:
+            import msvcrt
+
+            lock_dir = os.path.dirname(lock_path)
+            if lock_dir:
+                os.makedirs(lock_dir, exist_ok=True)
+
+            f = open(lock_path, "a+", encoding="utf-8")
+            try:
+                # Non-blocking exclusive lock of 1 byte.
+                # NOTE: msvcrt.locking locks relative to the current file pointer.
+                # Lock byte 0 so all processes contend for the same region.
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+
+                pid_text = f"{os.getpid()}\n"
+                f.seek(0)
+                f.write(pid_text)
+                f.flush()
+                # Keep the file length >= 1 byte while the lock is held.
+                # Truncating to 0 can invalidate the locked region.
+                try:
+                    f.truncate(max(len(pid_text), 1))
+                except Exception:
+                    pass
+            except OSError:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+                raise SystemExit("bot_runner already running (Windows file lock)")
+
+            global _WIN_LOCK_FILE
+            _WIN_LOCK_FILE = f
+
+            def _cleanup_file_lock() -> None:
+                try:
+                    if _WIN_LOCK_FILE:
+                        try:
+                            _WIN_LOCK_FILE.seek(0)
+                            msvcrt.locking(_WIN_LOCK_FILE.fileno(), msvcrt.LK_UNLCK, 1)
+                        except Exception:
+                            pass
+                        try:
+                            _WIN_LOCK_FILE.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            atexit.register(_cleanup_file_lock)
+            logger.info(f"Acquired bot_runner Windows file lock: {lock_path} (pid={os.getpid()})")
+            return
+        except SystemExit:
+            raise
+        except Exception:
+            # Fall back to mutex+pid file logic below if anything unexpected happens.
+            pass
+
+    # Windows: prefer a named mutex. This is more reliable than a PID/file-only lock,
+    # especially when the venv python.exe is actually a launcher (py.exe).
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            ERROR_ALREADY_EXISTS = 183
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+            CreateMutexW = kernel32.CreateMutexW
+            CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+            CreateMutexW.restype = wintypes.HANDLE
+
+            ReleaseMutex = kernel32.ReleaseMutex
+            ReleaseMutex.argtypes = [wintypes.HANDLE]
+            ReleaseMutex.restype = wintypes.BOOL
+
+            GetLastError = kernel32.GetLastError
+            GetLastError.argtypes = []
+            GetLastError.restype = wintypes.DWORD
+
+            CloseHandle = kernel32.CloseHandle
+            CloseHandle.argtypes = [wintypes.HANDLE]
+            CloseHandle.restype = wintypes.BOOL
+
+            # Use a Global mutex so background tasks/services can't start a second poller in another session.
+            # If we can't create/open it (permissions/session), fall back to the file lock below.
+            handle = CreateMutexW(None, True, "Global\\ElectionManagerBotRunner")
+            if handle:
+                last_err = int(GetLastError())
+                if last_err == ERROR_ALREADY_EXISTS:
+                    try:
+                        # We opened an existing mutex => another instance is running.
+                        CloseHandle(handle)
+                    except Exception:
+                        pass
+                    raise SystemExit("bot_runner already running (Windows mutex)")
+            else:
+                # Can't create/open global mutex; use file lock for a stable machine-wide single instance.
+                raise RuntimeError("Global mutex not available; falling back to file lock")
+
+            global _WIN_MUTEX_HANDLE
+            _WIN_MUTEX_HANDLE = handle
+
+            def _cleanup_mutex() -> None:
+                try:
+                    if _WIN_MUTEX_HANDLE:
+                        try:
+                            ReleaseMutex(_WIN_MUTEX_HANDLE)
+                        except Exception:
+                            pass
+                        CloseHandle(_WIN_MUTEX_HANDLE)
+                except Exception:
+                    pass
+
+            atexit.register(_cleanup_mutex)
+        except SystemExit:
+            raise
+        except Exception:
+            # Fall back to file lock below.
+            pass
+
     lock_dir = os.path.dirname(lock_path)
     if lock_dir:
         os.makedirs(lock_dir, exist_ok=True)
@@ -769,7 +1390,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'city': getattr(c, 'city', None),
                 'province': getattr(c, 'province', None),
                 'constituency': getattr(c, 'constituency', None),
-                'bot_config': c.bot_config,
             }
         finally:
             db.close()
@@ -781,6 +1401,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if msg:
             await safe_reply_text(msg, "خطا: اطلاعات کاندیدا یافت نشد.")
         return
+
+    # Monitoring: record /start
+    try:
+        if update.effective_user is not None:
+            log_ux_sync(
+                candidate_id=int(candidate_id),
+                telegram_user_id=str(update.effective_user.id),
+                state=context.user_data.get("state") or STATE_MAIN,
+                action="start_command",
+                expected_action="tap_menu_button",
+            )
+    except Exception:
+        pass
 
     # Deep-link support: https://t.me/<bot>?start=question_<id>
     try:
@@ -814,7 +1447,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
 
                 if not row:
-                    context.user_data["state"] = STATE_IDLE
+                    context.user_data["state"] = STATE_MAIN
                     await safe_reply_text(msg, "این سؤال یافت نشد یا هنوز پاسخ عمومی ندارد.", reply_markup=build_main_keyboard())
                     return
 
@@ -823,14 +1456,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 topic = _normalize_text(getattr(row, "topic", ""))
                 is_featured = bool(getattr(row, "is_featured", False))
                 badge = " ⭐ منتخب" if is_featured else ""
-                head = f"[{topic}] " if topic else ""
-                bot_cfg = candidate.get('bot_config') if isinstance(candidate, dict) else {}
-                code = _question_code(bot_cfg if isinstance(bot_cfg, dict) else {}, qid)
-                block = f"❓ {head}{q_txt}\n\n✅ {a_txt}\n\n🔖 کد سؤال: {code}{badge}"
+                answered_at = getattr(row, "answered_at", None)
+                block = _format_public_question_answer_block(topic=topic, question=q_txt, answer=a_txt, answered_at=answered_at)
+                if badge:
+                    block = block + f"\n\n{badge.strip()}"
 
-                context.user_data["state"] = STATE_IDLE
-                await safe_reply_text(msg, block, reply_markup=build_vote_inline_keyboard(qid))
-                await safe_reply_text(msg, "لطفاً از دکمه‌های زیر استفاده کنید 👇", reply_markup=build_main_keyboard())
+                context.user_data["state"] = STATE_QUESTION_MENU
+                await safe_reply_text(msg, block, reply_markup=build_question_hub_keyboard())
                 return
     except Exception:
         logger.exception("Failed to handle /start deep-link")
@@ -838,16 +1470,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Save User Data (also logs Telegram user id -> candidate + city/province/constituency)
     await save_bot_user(update, candidate_id=candidate_id, candidate_snapshot=candidate)
 
-    context.user_data["state"] = STATE_IDLE
-    context.user_data["idle_menu"] = "main"
+    context.user_data["state"] = STATE_MAIN
     context.user_data.pop("feedback_topic", None)
 
-    welcome_text = f"سلام! من بات {candidate['name']} هستم.\n\n"
-
-    if candidate['slogan']:
-        welcome_text += f"📣 {candidate['slogan']}\n\n"
-    
-    welcome_text += "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:"
+    cand_name = _normalize_text(candidate.get('name')) or "نماینده"
+    welcome_text = (
+        "👋 سلام، خوشحالیم که اینجایید\n\n"
+        "اینجا جاییه برای شنیده شدن صدای شما.\n"
+        "این بات راه ارتباط مستقیم شما\n"
+        f"با {cand_name}\n\n"
+        "👇 از منوی زیر می‌تونی:\n"
+        "━━━━━━━━━━━━━━\n"
+        "📌 سؤال بپرسی\n"
+        "📌 برنامه‌ها رو ببینی\n"
+        "📌 نظر یا دغدغه‌ات رو بفرستی\n\n"
+        "منتظرت هستیم 👇"
+    )
     reply_markup = build_main_keyboard()
 
     msg = update.effective_message
@@ -928,7 +1566,7 @@ async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle menu messages and group management."""
-    text = update.message.text
+    text = (update.message.text or "")
     candidate_id = context.bot_data.get("candidate_id")
     chat_type = update.message.chat.type
     
@@ -1097,56 +1735,272 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- Private Chat MVP V1 Menu Logic ---
 
     text = (text or "").strip()
-    state = context.user_data.get("state") or STATE_IDLE
+    state = context.user_data.get("state") or STATE_MAIN
 
-    if text == BTN_BACK:
-        context.user_data["state"] = STATE_IDLE
-        context.user_data["idle_menu"] = "main"
+    # If state ever gets corrupted, reset safely (rare) and log.
+    known_states = {
+        STATE_MAIN,
+        STATE_ABOUT_MENU,
+        STATE_OTHER_MENU,
+        STATE_COMMITMENTS_VIEW,
+        STATE_PROGRAMS,
+        STATE_FEEDBACK_TEXT,
+        STATE_QUESTION_TEXT,
+        STATE_QUESTION_MENU,
+        STATE_QUESTION_SEARCH,
+        STATE_QUESTION_CATEGORY,
+        STATE_QUESTION_ENTRY,
+        STATE_QUESTION_VIEW_METHOD,
+        STATE_QUESTION_VIEW_CATEGORY,
+        STATE_QUESTION_VIEW_LIST,
+        STATE_QUESTION_VIEW_ANSWER,
+        STATE_QUESTION_VIEW_RESULTS,
+        STATE_QUESTION_VIEW_SEARCH_TEXT,
+        STATE_QUESTION_ASK_ENTRY,
+        STATE_QUESTION_ASK_TOPIC,
+        STATE_QUESTION_ASK_TEXT,
+        STATE_BOTREQ_NAME,
+        STATE_BOTREQ_ROLE,
+        STATE_BOTREQ_CONSTITUENCY,
+        STATE_BOTREQ_CONTACT,
+    }
+    if state not in known_states:
+        try:
+            if update.effective_user is not None:
+                log_ux_sync(
+                    candidate_id=int(candidate_id),
+                    telegram_user_id=str(update.effective_user.id),
+                    state=str(state),
+                    action="forced_return_to_main_menu",
+                    expected_action="tap_menu_button",
+                )
+        except Exception:
+            pass
+        context.user_data["state"] = STATE_MAIN
+        state = STATE_MAIN
+
+    # Minimal loop detection: user keeps landing in same non-main state repeatedly.
+    try:
+        last_state = context.user_data.get("_loop_last_state")
+        loop_count = int(context.user_data.get("_loop_count") or 0)
+        if str(state) == str(last_state):
+            loop_count += 1
+        else:
+            loop_count = 1
+        context.user_data["_loop_last_state"] = str(state)
+        context.user_data["_loop_count"] = loop_count
+
+        if loop_count >= 6 and state != STATE_MAIN:
+            last_logged_state = context.user_data.get("_loop_logged_state")
+            last_logged_at = context.user_data.get("_loop_logged_at")
+            now = datetime.utcnow()
+            should_log = True
+            if last_logged_state == str(state) and isinstance(last_logged_at, datetime):
+                # rate-limit to avoid spam
+                should_log = (now - last_logged_at) > timedelta(minutes=10)
+            if should_log and update.effective_user is not None:
+                log_ux_sync(
+                    candidate_id=int(candidate_id),
+                    telegram_user_id=str(update.effective_user.id),
+                    state=str(state),
+                    action="state_loop_detected",
+                    expected_action="use_back_or_main_menu",
+                )
+                context.user_data["_loop_logged_state"] = str(state)
+                context.user_data["_loop_logged_at"] = now
+    except Exception:
+        pass
+
+    question_step_states = {
+        STATE_QUESTION_ENTRY,
+        STATE_QUESTION_VIEW_METHOD,
+        STATE_QUESTION_VIEW_CATEGORY,
+        STATE_QUESTION_VIEW_LIST,
+        STATE_QUESTION_VIEW_ANSWER,
+        STATE_QUESTION_VIEW_RESULTS,
+        STATE_QUESTION_VIEW_SEARCH_TEXT,
+        STATE_QUESTION_ASK_ENTRY,
+        STATE_QUESTION_ASK_TOPIC,
+        STATE_QUESTION_ASK_TEXT,
+    }
+
+    # Important: in the step-based question flow, BACK must be "one step" within the wizard.
+    # So we defer BACK handling to per-state blocks below.
+    if _is_back(text) and state in question_step_states:
+        pass
+    elif _is_back(text):
+        prev_state = state
+        return_state = context.user_data.pop("_return_state", None)
+        context.user_data["state"] = STATE_MAIN
         context.user_data.pop("feedback_topic", None)
-        context.user_data.pop("question_category", None)
-        context.user_data.pop("lead_role", None)
-        context.user_data.pop("lead_contact_method", None)
-        context.user_data.pop("awaiting_contact_text", None)
-        context.user_data.pop("programs_mode", None)
+        context.user_data.pop("botreq_full_name", None)
+        context.user_data.pop("botreq_role", None)
+        context.user_data.pop("botreq_constituency", None)
+        context.user_data.pop("botreq_contact", None)
+        # Monitoring: flow abandoned mid-way
+        try:
+            if prev_state and prev_state != STATE_MAIN and update.effective_user is not None:
+                ft = _flow_type_from_state(prev_state)
+                if ft:
+                    track_flow_event_sync(candidate_id=int(candidate_id), flow_type=ft, event="flow_abandoned")
+                    log_ux_sync(
+                        candidate_id=int(candidate_id),
+                        telegram_user_id=str(update.effective_user.id),
+                        state=str(prev_state),
+                        action="flow_abandoned_midway",
+                        expected_action="complete_flow_or_back",
+                    )
+        except Exception:
+            pass
+
+        # If a flow was started from a submenu, return there instead of jumping to main.
+        if return_state == STATE_ABOUT_MENU:
+            context.user_data["state"] = STATE_ABOUT_MENU
+            await safe_reply_text(update.message, "به «درباره نماینده» برگشتید.", reply_markup=build_about_keyboard())
+            return
+        if return_state == STATE_OTHER_MENU:
+            context.user_data["state"] = STATE_OTHER_MENU
+            await safe_reply_text(update.message, "به «سایر امکانات» برگشتید.", reply_markup=build_other_keyboard())
+            return
+
         await safe_reply_text(update.message, "به منوی اصلی برگشتید.", reply_markup=build_main_keyboard())
         return
 
-    # --- Lead / bot request flow (strict: lead_role -> lead_contact_choice -> done) ---
-    if state == STATE_LEAD_ROLE:
-        allowed = {ROLE_REPRESENTATIVE, ROLE_CANDIDATE, ROLE_TEAM}
-        if text not in allowed:
-            await safe_reply_text(update.message, "لطفاً نقش خود را از دکمه‌ها انتخاب کنید.", reply_markup=build_bot_request_role_keyboard())
+    # Build-bot request flow
+    if state == STATE_BOTREQ_NAME:
+        reserved = {
+            BTN_QUESTION,
+            BTN_COMMITMENTS,
+            BTN_FEEDBACK,
+            BTN_FEEDBACK_LEGACY,
+            BTN_ABOUT_MENU,
+            BTN_OTHER_MENU,
+            BTN_ABOUT_INTRO,
+            BTN_PROGRAMS,
+            BTN_HQ_ADDRESSES,
+            BTN_VOICE_INTRO,
+            BTN_BUILD_BOT,
+            BTN_ABOUT_BOT,
+            BTN_CONTACT,
+            BTN_INTRO,
+            BTN_BOT_REQUEST,
+        }
+        if text in reserved or not text:
+            try:
+                if update.effective_user is not None:
+                    log_ux_sync(
+                        candidate_id=int(candidate_id),
+                        telegram_user_id=str(update.effective_user.id),
+                        state=state,
+                        action="unexpected_text_input",
+                        expected_action="enter_full_name",
+                    )
+            except Exception:
+                pass
+            await safe_reply_text(update.message, "نام و نام خانوادگی را وارد کنید یا «بازگشت» را بزنید.")
             return
-        context.user_data["lead_role"] = text
-        context.user_data["lead_contact_method"] = None
-        context.user_data["awaiting_contact_text"] = False
-        context.user_data["state"] = STATE_LEAD_CONTACT_CHOICE
-        await safe_reply_text(update.message, "روش تماس را انتخاب کنید:", reply_markup=build_lead_contact_choice_keyboard())
+        if len(text) < 3:
+            await safe_reply_text(update.message, "نام خیلی کوتاه است. لطفاً دوباره وارد کنید:")
+            return
+        context.user_data["botreq_full_name"] = text
+        context.user_data["state"] = STATE_BOTREQ_ROLE
+        await safe_reply_text(update.message, "نقش شما کدام است؟", reply_markup=build_bot_request_role_keyboard())
         return
 
-    if state == STATE_LEAD_CONTACT_CHOICE:
-        # Step 1: user chooses contact method
-        if text in {"☎️ شماره تماس", "💬 آیدی تلگرام"}:
-            context.user_data["lead_contact_method"] = text
-            context.user_data["awaiting_contact_text"] = True
-            await safe_reply_text(update.message, "اطلاعات تماس را ارسال کنید:", reply_markup=build_back_keyboard())
+    if state == STATE_BOTREQ_ROLE:
+        allowed = {ROLE_REPRESENTATIVE, ROLE_CANDIDATE, ROLE_TEAM}
+        if text not in allowed:
+            try:
+                if update.effective_user is not None:
+                    log_ux_sync(
+                        candidate_id=int(candidate_id),
+                        telegram_user_id=str(update.effective_user.id),
+                        state=state,
+                        action="invalid_button_click",
+                        expected_action="select_role_button",
+                    )
+            except Exception:
+                pass
+            await safe_reply_text(update.message, "لطفاً یکی از گزینه‌های نقش را انتخاب کنید.", reply_markup=build_bot_request_role_keyboard())
             return
+        context.user_data["botreq_role"] = text
+        context.user_data["state"] = STATE_BOTREQ_CONSTITUENCY
+        await safe_reply_text(update.message, "حوزه انتخابیه را وارد کنید:", reply_markup=build_back_keyboard())
+        return
 
-        # Step 2: user types the contact
-        if not context.user_data.get("awaiting_contact_text"):
-            await safe_reply_text(update.message, "ابتدا روش تماس را انتخاب کنید.", reply_markup=build_lead_contact_choice_keyboard())
-            return
-
-        reserved = {BTN_INTRO, BTN_PROGRAMS, BTN_FEEDBACK, BTN_FEEDBACK_LEGACY, BTN_QUESTION, BTN_CONTACT, BTN_BUILD_BOT, BTN_BACK}
+    if state == STATE_BOTREQ_CONSTITUENCY:
+        reserved = {
+            BTN_INTRO,
+            BTN_PROGRAMS,
+            BTN_FEEDBACK,
+            BTN_FEEDBACK_LEGACY,
+            BTN_QUESTION,
+            BTN_CONTACT,
+            BTN_BUILD_BOT,
+            BTN_BOT_REQUEST,
+            ROLE_REPRESENTATIVE,
+            ROLE_CANDIDATE,
+            ROLE_TEAM,
+        }
         if text in reserved or not text:
-            await safe_reply_text(update.message, "لطفاً اطلاعات تماس را ارسال کنید یا «بازگشت» را بزنید.")
+            try:
+                if update.effective_user is not None:
+                    log_ux_sync(
+                        candidate_id=int(candidate_id),
+                        telegram_user_id=str(update.effective_user.id),
+                        state=state,
+                        action="unexpected_text_input",
+                        expected_action="enter_constituency",
+                    )
+            except Exception:
+                pass
+            await safe_reply_text(update.message, "حوزه انتخابیه را وارد کنید یا «بازگشت» را بزنید.")
+            return
+        context.user_data["botreq_constituency"] = text
+        context.user_data["state"] = STATE_BOTREQ_CONTACT
+        await safe_reply_text(update.message, "شماره تماس یا آی‌دی تلگرام را وارد کنید:", reply_markup=build_back_keyboard())
+        return
+
+    if state == STATE_BOTREQ_CONTACT:
+        reserved = {
+            BTN_INTRO,
+            BTN_PROGRAMS,
+            BTN_FEEDBACK,
+            BTN_FEEDBACK_LEGACY,
+            BTN_QUESTION,
+            BTN_CONTACT,
+            BTN_BUILD_BOT,
+            BTN_BOT_REQUEST,
+            ROLE_REPRESENTATIVE,
+            ROLE_CANDIDATE,
+            ROLE_TEAM,
+        }
+        if text in reserved or not text:
+            try:
+                if update.effective_user is not None:
+                    log_ux_sync(
+                        candidate_id=int(candidate_id),
+                        telegram_user_id=str(update.effective_user.id),
+                        state=state,
+                        action="unexpected_text_input",
+                        expected_action="enter_contact",
+                    )
+            except Exception:
+                pass
+            await safe_reply_text(update.message, "شماره تماس یا آی‌دی تلگرام را وارد کنید یا «بازگشت» را بزنید.")
             return
 
-        role = _normalize_text(context.user_data.get("lead_role"))
-        contact_method = _normalize_text(context.user_data.get("lead_contact_method"))
+        full_name = _normalize_text(context.user_data.get("botreq_full_name"))
+        role = _normalize_text(context.user_data.get("botreq_role"))
+        constituency = _normalize_text(context.user_data.get("botreq_constituency"))
         contact = text
-        constituency = _candidate_constituency(candidate)
-        formatted = (f"نقش: {role}\nروش تماس: {contact_method}\nتماس: {contact}").strip()
+
+        formatted = (
+            f"نام و نام خانوادگی: {full_name}\n"
+            f"نقش: {role}\n"
+            f"حوزه انتخابیه: {constituency}\n"
+            f"تماس: {contact}"
+        ).strip()
 
         submission_id = await run_db_query(
             _save_submission_sync,
@@ -1156,8 +2010,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             submission_type="BOT_REQUEST",
             topic=(role or None),
             text=formatted,
-            constituency=constituency,
-            requester_full_name=None,
+            constituency=(constituency or None),
+            requester_full_name=(full_name or None),
             requester_contact=(contact or None),
             status="new_request",
         )
@@ -1194,26 +2048,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if admin_chat_id:
                 cand_name = _normalize_text(candidate.get("full_name") or candidate.get("name") or "")
                 cand_bot = _normalize_text(candidate.get("bot_name") or "")
-                header = f"🛠 درخواست ساخت بات اختصاصی (کد: {submission_id})"
+                header = f"📌 درخواست ساخت بات اختصاصی (کد: {submission_id})"
                 source = f"از بات: {cand_name} (@{cand_bot})" if cand_bot else f"از بات: {cand_name}"
                 req_user = _normalize_text(update.effective_user.username if update.effective_user else "")
                 req_user_line = f"یوزرنیم متقاضی: @{req_user}" if req_user else ""
                 msg = "\n".join([x for x in [header, source, formatted, req_user_line] if x]).strip()
                 await context.bot.send_message(chat_id=int(admin_chat_id), text=msg)
+            else:
+                logger.warning("BOT_REQUEST admin notify skipped: no admin chat id resolved")
         except Exception:
             logger.exception("Failed to notify admin of BOT_REQUEST")
 
-        context.user_data["state"] = STATE_DONE
-        context.user_data.pop("lead_role", None)
-        context.user_data.pop("lead_contact_method", None)
-        context.user_data.pop("awaiting_contact_text", None)
-        await safe_reply_text(update.message, "✅ درخواست شما ثبت شد.", reply_markup=build_main_keyboard())
-        context.user_data["state"] = STATE_IDLE
+        context.user_data["state"] = STATE_MAIN
+        context.user_data.pop("botreq_full_name", None)
+        context.user_data.pop("botreq_role", None)
+        context.user_data.pop("botreq_constituency", None)
+        context.user_data.pop("botreq_contact", None)
+        await safe_reply_text(
+            update.message,
+            "درخواست شما ثبت شد.\nتیم ما به‌زودی با شما تماس می‌گیرد.",
+            reply_markup=build_main_keyboard(),
+        )
+
+        # Flow completed: lead
+        try:
+            track_flow_event_sync(candidate_id=int(candidate_id), flow_type="lead", event="flow_completed")
+        except Exception:
+            pass
+        return
+
+    # Legacy overload state: keep safe behavior but try to route users to the new step-based flow.
+    if state == STATE_QUESTION_MENU:
+        context.user_data["state"] = STATE_QUESTION_ENTRY
+        await safe_reply_text(update.message, "سؤال از نماینده\nیکی را انتخاب کنید:", reply_markup=build_question_entry_keyboard())
         return
 
     # Feedback flow
     if state == STATE_FEEDBACK_TEXT:
-        if text in {BTN_INTRO, BTN_PROGRAMS, BTN_FEEDBACK, BTN_FEEDBACK_LEGACY, BTN_QUESTION, BTN_CONTACT, BTN_COMMITMENTS, BTN_ABOUT_MENU, BTN_OTHER_MENU, BTN_BUILD_BOT}:
+        if text in {BTN_INTRO, BTN_PROGRAMS, BTN_FEEDBACK, BTN_FEEDBACK_LEGACY, BTN_QUESTION, BTN_CONTACT, BTN_BUILD_BOT}:
             await safe_reply_text(update.message, "برای ثبت نظر/دغدغه، لطفاً متن را ارسال کنید یا «بازگشت» را بزنید.")
             return
 
@@ -1228,20 +2100,335 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=text,
             constituency=constituency,
         )
-        context.user_data["state"] = STATE_DONE
+        context.user_data["state"] = STATE_MAIN
         context.user_data.pop("feedback_topic", None)
         await safe_reply_text(update.message, _build_feedback_confirmation_text(socials), reply_markup=build_main_keyboard())
-        context.user_data["state"] = STATE_IDLE
+
+        # Flow completed: comment
+        try:
+            track_flow_event_sync(candidate_id=int(candidate_id), flow_type="comment", event="flow_completed")
+        except Exception:
+            pass
         return
 
-    # Question flow
-    if state == STATE_QUESTION_TEXT:
-        if not _normalize_text(context.user_data.get("question_category")):
-            context.user_data["state"] = STATE_QUESTION_CATEGORY
-            await safe_reply_text(update.message, "ابتدا دسته‌بندی سؤال را انتخاب کنید:", reply_markup=build_question_category_keyboard())
+    # --- Strict step-based question flow (preferred) ---
+
+    # SCREEN 1: entry with exactly two buttons
+    if state == STATE_QUESTION_ENTRY:
+        if _is_back(text):
+            context.user_data["state"] = STATE_MAIN
+            await safe_reply_text(update.message, "به منوی اصلی برگشتید.", reply_markup=build_main_keyboard())
+            return
+        if _btn_eq(text, BTN_VIEW_QUESTIONS):
+            context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+            await safe_reply_text(update.message, "موضوع موردنظرتان چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+            return
+        if _btn_eq(text, BTN_ASK_NEW_QUESTION):
+            context.user_data["state"] = STATE_QUESTION_ASK_TOPIC
+            await safe_reply_text(update.message, "موضوع سؤال شما چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
             return
 
-        if text in {BTN_INTRO, BTN_PROGRAMS, BTN_FEEDBACK, BTN_FEEDBACK_LEGACY, BTN_QUESTION, BTN_CONTACT, BTN_COMMITMENTS, BTN_ABOUT_MENU, BTN_OTHER_MENU, BTN_BUILD_BOT}:
+        await safe_reply_text(update.message, "یکی را انتخاب کنید:", reply_markup=build_question_entry_keyboard())
+        return
+
+    # SCREEN 2A: View flow method
+    # Backward compatibility: older versions had an intermediate view-method screen.
+    # We no longer show that menu; always go directly to categories.
+    if state == STATE_QUESTION_VIEW_METHOD:
+        if _is_back(text):
+            context.user_data["state"] = STATE_QUESTION_ENTRY
+            await safe_reply_text(update.message, "سؤال از نماینده\nیکی را انتخاب کنید:", reply_markup=build_question_entry_keyboard())
+            return
+        context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+        await safe_reply_text(update.message, "موضوع موردنظرتان چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+        return
+
+    # View flow: category selection
+    if state == STATE_QUESTION_VIEW_CATEGORY:
+        if _is_back(text):
+            context.user_data["state"] = STATE_QUESTION_ENTRY
+            await safe_reply_text(update.message, "سؤال از نماینده\nیکی را انتخاب کنید:", reply_markup=build_question_entry_keyboard())
+            return
+
+        chosen = (text or "").replace("🗂", "").strip()
+        if chosen not in QUESTION_CATEGORIES:
+            await safe_reply_text(update.message, "دسته‌بندی نامعتبر است.", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+            return
+
+        def _get_category_answered(cid: int, topic: str) -> list[BotSubmission]:
+            db = SessionLocal()
+            try:
+                q = (
+                    db.query(BotSubmission)
+                    .filter(
+                        BotSubmission.candidate_id == int(cid),
+                        BotSubmission.type == "QUESTION",
+                        BotSubmission.status == "ANSWERED",
+                        BotSubmission.is_public == True,  # noqa: E712
+                        BotSubmission.answer.isnot(None),
+                        BotSubmission.topic == topic,
+                    )
+                    .order_by(BotSubmission.answered_at.desc(), BotSubmission.id.desc())
+                )
+                return q.all()
+            finally:
+                db.close()
+
+        rows = await run_db_query(_get_category_answered, candidate_id, chosen)
+        if not rows:
+            context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+            await safe_reply_text(
+                update.message,
+                f"در دسته «{chosen}» هنوز پاسخ عمومی ثبت نشده است.\nیک دسته دیگر انتخاب کنید:",
+                reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True),
+            )
+            return
+
+        items: list[dict] = []
+        for r in rows:
+            q_txt = _normalize_text(getattr(r, "text", ""))
+            a_txt = _normalize_text(getattr(r, "answer", ""))
+            rid = getattr(r, "id", None)
+            answered_at = getattr(r, "answered_at", None)
+            if q_txt and a_txt:
+                items.append({"id": rid, "q": q_txt, "a": a_txt, "answered_at": answered_at})
+
+        # Simplest behavior: show ALL Q&A immediately (no extra steps)
+        context.user_data["view_topic"] = chosen
+        context.user_data["state"] = STATE_QUESTION_VIEW_RESULTS
+        await _send_question_answers_message(update_message=update.message, topic=chosen, items=items)
+        return
+
+    if state == STATE_QUESTION_VIEW_RESULTS:
+        if _is_back(text):
+            context.user_data.pop("view_topic", None)
+            context.user_data.pop("view_items", None)
+            context.user_data.pop("view_choice", None)
+            context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+            await safe_reply_text(update.message, "موضوع موردنظرتان چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+            return
+        await safe_reply_text(update.message, "برای برگشت، «بازگشت» را بزنید.", reply_markup=build_back_keyboard())
+        return
+
+    # View flow: list of questions for chosen category
+    if state == STATE_QUESTION_VIEW_LIST:
+        if _is_back(text):
+            context.user_data.pop("view_topic", None)
+            context.user_data.pop("view_items", None)
+            context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+            await safe_reply_text(update.message, "موضوع موردنظرتان چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+            return
+
+        items = context.user_data.get("view_items")
+        topic = context.user_data.get("view_topic")
+        if not isinstance(items, list) or not topic:
+            context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+            await safe_reply_text(update.message, "موضوع موردنظرتان چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+            return
+
+        choice = _parse_question_list_choice(text)
+        if not choice or choice < 1 or choice > len(items):
+            await safe_reply_text(update.message, "شمارهٔ سؤال را ارسال کنید (مثلاً 1) یا «بازگشت» را بزنید.", reply_markup=build_back_keyboard())
+            return
+
+        selected = items[choice - 1]
+        q_txt = _normalize_text(selected.get("q") or "")
+        a_txt = _normalize_text(selected.get("a") or "")
+        answered_at = selected.get("answered_at")
+        context.user_data["state"] = STATE_QUESTION_VIEW_ANSWER
+        context.user_data["view_choice"] = int(choice)
+        await safe_reply_text(
+            update.message,
+            _format_public_question_answer_block(
+                topic=str(topic),
+                question=q_txt,
+                answer=a_txt,
+                answered_at=answered_at if isinstance(answered_at, datetime) else None,
+            ),
+            reply_markup=build_back_keyboard(),
+        )
+        return
+
+    # View flow: show answer, BACK returns to the list (one step)
+    if state == STATE_QUESTION_VIEW_ANSWER:
+        if _is_back(text):
+            items = context.user_data.get("view_items")
+            topic = context.user_data.get("view_topic")
+            if isinstance(items, list) and topic:
+                context.user_data["state"] = STATE_QUESTION_VIEW_LIST
+                await _send_question_list_message(update_message=update.message, topic=str(topic), items=list(items))
+                return
+            context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+            await safe_reply_text(update.message, "موضوع موردنظرتان چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+            return
+
+        await safe_reply_text(update.message, "برای برگشت، «بازگشت» را بزنید.", reply_markup=build_back_keyboard())
+        return
+
+    # View flow: search text
+    if state == STATE_QUESTION_VIEW_SEARCH_TEXT:
+        if _is_back(text):
+            context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+            await safe_reply_text(update.message, "موضوع موردنظرتان چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+            return
+
+        q = (text or "").strip()
+        if len(q) < 2:
+            await safe_reply_text(update.message, "عبارت جستجو خیلی کوتاه است. دوباره تلاش کنید:")
+            return
+
+        def _search_public_answered(cid: int, query: str) -> list[BotSubmission]:
+            db = SessionLocal()
+            try:
+                qq = (
+                    db.query(BotSubmission)
+                    .filter(
+                        BotSubmission.candidate_id == int(cid),
+                        BotSubmission.type == "QUESTION",
+                        BotSubmission.status == "ANSWERED",
+                        BotSubmission.is_public == True,  # noqa: E712
+                        BotSubmission.answer.isnot(None),
+                        or_(
+                            BotSubmission.text.contains(query),
+                            BotSubmission.answer.contains(query),
+                        ),
+                    )
+                    .order_by(BotSubmission.answered_at.desc(), BotSubmission.id.desc())
+                    .limit(10)
+                )
+                return qq.all()
+            finally:
+                db.close()
+
+        rows = await run_db_query(_search_public_answered, candidate_id, q)
+        if not rows:
+            await safe_reply_text(update.message, "نتیجه‌ای پیدا نشد. عبارت دیگری امتحان کنید یا «بازگشت» را بزنید.")
+            return
+
+        blocks: list[str] = []
+        for r in rows:
+            q_txt = _normalize_text(getattr(r, "text", ""))
+            a_txt = _normalize_text(getattr(r, "answer", ""))
+            topic = _normalize_text(getattr(r, "topic", ""))
+            answered_at = getattr(r, "answered_at", None)
+            if q_txt and a_txt:
+                blocks.append(_format_public_question_answer_block(topic=topic, question=q_txt, answer=a_txt, answered_at=answered_at))
+
+        context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+        await safe_reply_text(
+            update.message,
+            "🔍 نتایج جستجو\n\n" + "\n\n".join(blocks),
+            reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True),
+        )
+        return
+
+    # SCREEN 2B: Ask flow entry
+    if state == STATE_QUESTION_ASK_ENTRY:
+        if _is_back(text):
+            context.user_data["state"] = STATE_QUESTION_ENTRY
+            await safe_reply_text(update.message, "سؤال از نماینده\nیکی را انتخاب کنید:", reply_markup=build_question_entry_keyboard())
+            return
+
+        # No intermediate steps: go directly to mandatory topic selection
+        context.user_data["state"] = STATE_QUESTION_ASK_TOPIC
+        await safe_reply_text(update.message, "موضوع سؤال شما چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+        return
+
+    # SCREEN 3: Ask flow topic selection
+    if state == STATE_QUESTION_ASK_TOPIC:
+        if _is_back(text):
+            context.user_data["state"] = STATE_QUESTION_ENTRY
+            await safe_reply_text(update.message, "سؤال از نماینده\nیکی را انتخاب کنید:", reply_markup=build_question_entry_keyboard())
+            return
+
+        chosen = (text or "").replace("🗂", "").strip()
+        if chosen not in QUESTION_CATEGORIES:
+            await safe_reply_text(update.message, "موضوع نامعتبر است.", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+            return
+
+        context.user_data["question_topic"] = chosen
+        try:
+            track_flow_event_sync(candidate_id=int(candidate_id), flow_type="question", event="flow_started")
+        except Exception:
+            pass
+        context.user_data["state"] = STATE_QUESTION_ASK_TEXT
+        await safe_reply_text(update.message, "سؤال‌تان را کوتاه و شفاف بنویسید.\n(در یک پیام)", reply_markup=build_back_keyboard())
+        return
+
+    # Ask flow: receive question text
+    if state == STATE_QUESTION_ASK_TEXT:
+        if _is_back(text):
+            context.user_data["state"] = STATE_QUESTION_ASK_TOPIC
+            await safe_reply_text(update.message, "موضوع سؤال شما چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+            return
+
+        q_text = (text or "").strip()
+        if len(q_text) < 10:
+            await safe_reply_text(update.message, "متن سؤال باید حداقل ۱۰ کاراکتر باشد. دوباره ارسال کنید:")
+            return
+        if len(q_text) > 500:
+            await safe_reply_text(update.message, "متن سؤال باید حداکثر ۵۰۰ کاراکتر باشد. لطفاً کوتاه‌تر کنید:")
+            return
+
+        def _looks_duplicate(cid: int, norm: str) -> bool:
+            db = SessionLocal()
+            try:
+                rows = (
+                    db.query(BotSubmission)
+                    .filter(BotSubmission.candidate_id == int(cid), BotSubmission.type == "QUESTION")
+                    .order_by(BotSubmission.id.desc())
+                    .limit(100)
+                    .all()
+                )
+                for r in rows:
+                    existing = _normalize_text(getattr(r, "text", ""))
+                    existing_norm = re.sub(r"\s+", " ", existing).strip().lower()
+                    if existing_norm and existing_norm == norm:
+                        return True
+                return False
+            finally:
+                db.close()
+
+        norm = re.sub(r"\s+", " ", q_text).strip().lower()
+        is_dup = await run_db_query(_looks_duplicate, candidate_id, norm)
+        if is_dup:
+            context.user_data["state"] = STATE_MAIN
+            context.user_data.pop("question_topic", None)
+            await safe_reply_text(update.message, "این سؤال قبلاً ثبت شده است.", reply_markup=build_main_keyboard())
+            return
+
+        topic = _normalize_text(context.user_data.get("question_topic")) or None
+        constituency = _candidate_constituency(candidate)
+        await run_db_query(
+            _save_submission_sync,
+            candidate_id=candidate_id,
+            telegram_user_id=str(update.effective_user.id) if update.effective_user else "",
+            telegram_username=(update.effective_user.username if update.effective_user else None),
+            submission_type="QUESTION",
+            topic=topic,
+            text=q_text,
+            constituency=constituency,
+            status="PENDING",
+            is_public=False,
+        )
+
+        context.user_data["state"] = STATE_MAIN
+        context.user_data.pop("question_topic", None)
+        await safe_reply_text(
+            update.message,
+            "ممنون. سؤال شما ثبت شد و به نماینده منتقل می‌شود.",
+            reply_markup=build_main_keyboard(),
+        )
+
+        try:
+            track_flow_event_sync(candidate_id=int(candidate_id), flow_type="question", event="flow_completed")
+        except Exception:
+            pass
+        return
+
+    # --- Legacy question flow (kept for compatibility) ---
+    if state == STATE_QUESTION_TEXT:
+        if text in {BTN_INTRO, BTN_PROGRAMS, BTN_FEEDBACK, BTN_FEEDBACK_LEGACY, BTN_QUESTION, BTN_CONTACT, BTN_BUILD_BOT, BTN_REGISTER_QUESTION}:
             await safe_reply_text(update.message, "برای ثبت سؤال، لطفاً متن سؤال را ارسال کنید یا «بازگشت» را بزنید.")
             return
 
@@ -1275,59 +2462,280 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         norm = re.sub(r"\s+", " ", q_text).strip().lower()
         is_dup = await run_db_query(_looks_duplicate, candidate_id, norm)
         if is_dup:
-            context.user_data["state"] = STATE_IDLE
+            context.user_data["state"] = STATE_MAIN
             await safe_reply_text(update.message, "این سؤال قبلاً ثبت شده است.", reply_markup=build_main_keyboard())
             return
 
         constituency = _candidate_constituency(candidate)
-        submission_id = await run_db_query(
+        await run_db_query(
             _save_submission_sync,
             candidate_id=candidate_id,
             telegram_user_id=str(update.effective_user.id) if update.effective_user else "",
             telegram_username=(update.effective_user.username if update.effective_user else None),
             submission_type="QUESTION",
-            topic=_normalize_text(context.user_data.get("question_category")) or None,
             text=q_text,
             constituency=constituency,
             status="PENDING",
             is_public=False,
         )
-        code = _question_code(bot_config, int(submission_id) if submission_id is not None else 0)
-        context.user_data["state"] = STATE_DONE
-        context.user_data.pop("question_category", None)
+        context.user_data["state"] = STATE_MAIN
         await safe_reply_text(
             update.message,
-            f"✅ سؤال شما ثبت شد.\n\n🔖 کد سؤال: {code}\n\nپاسخ‌ها به‌صورت عمومی منتشر می‌شوند (پاسخ فردی نداریم).",
+            "سؤال شما ثبت شد.\nدر صورت پاسخ‌گویی، پاسخ به‌صورت عمومی در همین بخش منتشر خواهد شد.",
             reply_markup=build_main_keyboard(),
         )
-        context.user_data["state"] = STATE_IDLE
+
+        # Flow completed: question
+        try:
+            track_flow_event_sync(candidate_id=int(candidate_id), flow_type="question", event="flow_completed")
+        except Exception:
+            pass
+        return
+
+    if state == STATE_QUESTION_SEARCH:
+        reserved = {
+            BTN_INTRO,
+            BTN_PROGRAMS,
+            BTN_FEEDBACK,
+            BTN_FEEDBACK_LEGACY,
+            BTN_QUESTION,
+            BTN_CONTACT,
+            BTN_BUILD_BOT,
+            BTN_REGISTER_QUESTION,
+            BTN_SEARCH_QUESTION,
+            BTN_BACK,
+        }
+        if text in reserved:
+            await safe_reply_text(update.message, "برای جستجو، یک عبارت کوتاه وارد کنید (مثلاً «مسکن»).")
+            return
+
+        q = (text or "").strip()
+        if len(q) < 2:
+            await safe_reply_text(update.message, "عبارت جستجو خیلی کوتاه است. دوباره تلاش کنید:")
+            return
+
+        def _search_public_answered(cid: int, query: str) -> list[BotSubmission]:
+            db = SessionLocal()
+            try:
+                qq = (
+                    db.query(BotSubmission)
+                    .filter(
+                        BotSubmission.candidate_id == int(cid),
+                        BotSubmission.type == "QUESTION",
+                        BotSubmission.status == "ANSWERED",
+                        BotSubmission.is_public == True,  # noqa: E712
+                        BotSubmission.answer.isnot(None),
+                        or_(
+                            BotSubmission.text.contains(query),
+                            BotSubmission.answer.contains(query),
+                        ),
+                    )
+                    .order_by(BotSubmission.answered_at.desc(), BotSubmission.id.desc())
+                    .limit(10)
+                )
+                return qq.all()
+            finally:
+                db.close()
+
+        rows = await run_db_query(_search_public_answered, candidate_id, q)
+        if not rows:
+            await safe_reply_text(update.message, "نتیجه‌ای پیدا نشد. عبارت دیگری امتحان کنید یا «بازگشت» را بزنید.")
+            return
+
+        blocks: list[str] = []
+        for r in rows:
+            q_txt = _normalize_text(getattr(r, "text", ""))
+            a_txt = _normalize_text(getattr(r, "answer", ""))
+            topic = _normalize_text(getattr(r, "topic", ""))
+            head = f"[{topic}] " if topic else ""
+            if q_txt and a_txt:
+                rid = getattr(r, "id", None)
+                is_featured = bool(getattr(r, "is_featured", False))
+                badge = " ⭐" if is_featured else ""
+                code_line = f"\n🔖 کد سؤال: {rid}{badge}" if rid is not None else ""
+                blocks.append(f"❓ {head}{q_txt}\n✅ {a_txt}{code_line}")
+        await safe_reply_text(update.message, "🔍 نتایج جستجو\n\n" + "\n\n".join(blocks), reply_markup=build_question_hub_keyboard())
         return
 
     if state == STATE_QUESTION_CATEGORY:
-        if text in QUESTION_CATEGORIES:
-            context.user_data["question_category"] = text
-            context.user_data["state"] = STATE_QUESTION_TEXT
-            await safe_reply_text(update.message, "متن سؤال‌تان را تایپ کنید:", reply_markup=build_back_keyboard())
-            return
-        await safe_reply_text(update.message, "لطفاً یکی از دسته‌ها را انتخاب کنید 👇", reply_markup=build_question_category_keyboard())
+        # Legacy category state - route back to the new flow.
+        context.user_data["state"] = STATE_QUESTION_ENTRY
+        await safe_reply_text(update.message, "سؤال از نماینده\nیکی را انتخاب کنید:", reply_markup=build_question_entry_keyboard())
         return
 
-    # Programs quick selection (only allowed after entering Programs)
-    if context.user_data.get("programs_mode") and text.startswith("سوال "):
-        try:
-            idx = int(text.replace("سوال", "").strip()) - 1
-        except Exception:
-            idx = -1
-        if 0 <= idx < len(PROGRAM_QUESTIONS):
-            q = PROGRAM_QUESTIONS[idx]
-            a = _get_program_answer(candidate, idx)
-            await safe_reply_text(update.message, f"{q}\n\nپاسخ نماینده:\n{a}", reply_markup=build_back_keyboard())
-            return
+    # Programs state
+    if state == STATE_PROGRAMS:
+        if text.startswith("سوال "):
+            try:
+                idx = int(text.replace("سوال", "").strip()) - 1
+            except Exception:
+                idx = -1
+            if 0 <= idx < len(PROGRAM_QUESTIONS):
+                q = PROGRAM_QUESTIONS[idx]
+                a = _get_program_answer(candidate, idx)
+                await safe_reply_text(update.message, f"{q}\n\nپاسخ نماینده:\n{a}")
+                return
+        await safe_reply_text(update.message, "لطفاً یکی از گزینه‌ها را انتخاب کنید یا «بازگشت» را بزنید.")
+        return
+
+    # --- Global handlers for step-based Question UX ---
+    # Users can press old keyboards after a bot restart (context.user_data state lost).
+    # Treat these as top-level intents to avoid bouncing back to MAIN.
+    if _btn_eq(text, BTN_VIEW_QUESTIONS) or _btn_has(text, "مشاهده سوال", "مشاهده سؤال"):
+        context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+        await safe_reply_text(update.message, "موضوع موردنظرتان چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+        return
+
+    if _btn_eq(text, BTN_ASK_NEW_QUESTION) or _btn_has(text, "ثبت سوال", "ثبت سؤال"):
+        context.user_data["state"] = STATE_QUESTION_ASK_TOPIC
+        await safe_reply_text(update.message, "موضوع سؤال شما چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+        return
+
+    if _btn_eq(text, BTN_VIEW_BY_CATEGORY) or _btn_has(text, "دسته بندی", "دسته‌بندی"):
+        context.user_data["state"] = STATE_QUESTION_VIEW_CATEGORY
+        await safe_reply_text(update.message, "موضوع موردنظرتان چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+        return
+
+    if _btn_eq(text, BTN_VIEW_BY_SEARCH) or _btn_has(text, "جستجو"):
+        context.user_data["state"] = STATE_QUESTION_VIEW_SEARCH_TEXT
+        await safe_reply_text(update.message, "کلمه یا جمله کوتاه را بنویسید تا در سؤال‌ها جستجو کنم.", reply_markup=build_back_keyboard())
+        return
+
+    if _btn_eq(text, BTN_SELECT_TOPIC) or _btn_has(text, "انتخاب موضوع"):
+        context.user_data["state"] = STATE_QUESTION_ASK_TOPIC
+        await safe_reply_text(update.message, "موضوع سؤال شما چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+        return
 
     # Main menu
+    if text == BTN_ABOUT_MENU:
+        context.user_data["state"] = STATE_ABOUT_MENU
+        await safe_reply_text(update.message, "📂 درباره نماینده\n\nیکی از گزینه‌ها را انتخاب کنید:", reply_markup=build_about_keyboard())
+        return
+
+    if text == BTN_OTHER_MENU:
+        context.user_data["state"] = STATE_OTHER_MENU
+        await safe_reply_text(update.message, "⚙️ سایر امکانات\n\nیکی از گزینه‌ها را انتخاب کنید:", reply_markup=build_other_keyboard())
+        return
+
+    if text == BTN_COMMITMENTS:
+        try:
+            if update.effective_user is not None:
+                log_ux_sync(
+                    candidate_id=int(candidate_id),
+                    telegram_user_id=str(update.effective_user.id),
+                    state=STATE_MAIN,
+                    action="tap_commitments",
+                    expected_action="browse_commitments",
+                )
+                track_path_sync(candidate_id=int(candidate_id), path="main->commitments")
+        except Exception:
+            pass
+
+        def _get_commitments(cid: int):
+            db = SessionLocal()
+            try:
+                return (
+                    db.query(models.BotCommitment)
+                    .filter(models.BotCommitment.candidate_id == int(cid))
+                    .order_by(models.BotCommitment.created_at.desc())
+                    .limit(10)
+                    .all()
+                )
+            finally:
+                db.close()
+
+        rows = await run_db_query(_get_commitments, candidate_id)
+        if not rows:
+            context.user_data["state"] = STATE_COMMITMENTS_VIEW
+            await safe_reply_text(update.message, "📜 تعهدات\n\nفعلاً تعهدی ثبت نشده است.", reply_markup=build_back_keyboard())
+            return
+
+        blocks: list[str] = []
+        for i, r in enumerate(rows, start=1):
+            title = _normalize_text(getattr(r, "title", ""))
+            body = _normalize_text(getattr(r, "body", ""))
+            if not title and not body:
+                continue
+            if len(body) > 500:
+                body = body[:500].rstrip() + "…"
+            if title:
+                blocks.append(f"{i}) {title}\n{body}" if body else f"{i}) {title}")
+            else:
+                blocks.append(f"{i}) {body}")
+
+        context.user_data["state"] = STATE_COMMITMENTS_VIEW
+        await safe_reply_text(update.message, "📜 تعهدات نماینده\n\n" + "\n\n".join(blocks), reply_markup=build_back_keyboard())
+        return
+
+    # ABOUT submenu
+    if state == STATE_ABOUT_MENU:
+        if text in {BTN_ABOUT_INTRO, BTN_INTRO}:
+            # Reuse intro handler
+            text = BTN_INTRO
+        elif text == BTN_PROGRAMS:
+            # Programs is its own state; return to About on back
+            context.user_data["_return_state"] = STATE_ABOUT_MENU
+        elif text in {BTN_HQ_ADDRESSES, BTN_CONTACT}:
+            text = BTN_CONTACT
+        elif text == BTN_VOICE_INTRO:
+            # keep as-is
+            pass
+        else:
+            try:
+                if update.effective_user is not None:
+                    log_ux_sync(
+                        candidate_id=int(candidate_id),
+                        telegram_user_id=str(update.effective_user.id),
+                        state=STATE_ABOUT_MENU,
+                        action="invalid_button_click",
+                        expected_action="select_about_menu_button",
+                    )
+            except Exception:
+                pass
+            await safe_reply_text(update.message, "لطفاً یکی از گزینه‌های «درباره نماینده» را انتخاب کنید یا «بازگشت» را بزنید.", reply_markup=build_about_keyboard())
+            return
+
+    # OTHER submenu
+    if state == STATE_OTHER_MENU:
+        if text == BTN_BUILD_BOT:
+            # Show info and CTA; lead flow starts only on BTN_BOT_REQUEST
+            text = BTN_BUILD_BOT
+        elif text == BTN_ABOUT_BOT:
+            await safe_reply_text(
+                update.message,
+                "ℹ️ درباره این بات\n\n"
+                "این بات برای ارتباط شفاف شهروندان با نماینده طراحی شده است: پرسش، ثبت دغدغه و مشاهده تعهدات.\n"
+                "برای بازگشت، «بازگشت» را بزنید.",
+                reply_markup=build_other_keyboard(),
+            )
+            return
+        else:
+            try:
+                if update.effective_user is not None:
+                    log_ux_sync(
+                        candidate_id=int(candidate_id),
+                        telegram_user_id=str(update.effective_user.id),
+                        state=STATE_OTHER_MENU,
+                        action="invalid_button_click",
+                        expected_action="select_other_menu_button",
+                    )
+            except Exception:
+                pass
+            await safe_reply_text(update.message, "لطفاً یکی از گزینه‌های «سایر امکانات» را انتخاب کنید یا «بازگشت» را بزنید.", reply_markup=build_other_keyboard())
+            return
+
     if text == BTN_INTRO:
-        context.user_data["programs_mode"] = False
-        context.user_data["idle_menu"] = "about"
+        try:
+            if update.effective_user is not None:
+                log_ux_sync(
+                    candidate_id=int(candidate_id),
+                    telegram_user_id=str(update.effective_user.id),
+                    state=STATE_MAIN,
+                    action="tap_intro",
+                    expected_action="browse_intro_tabs",
+                )
+        except Exception:
+            pass
         name = _normalize_text(candidate.get('name')) or "نماینده"
         constituency = _candidate_constituency(candidate)
         slogan = _normalize_text(candidate.get('slogan') or (candidate.get('bot_config') or {}).get('slogan'))
@@ -1398,9 +2806,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == BTN_PROGRAMS:
-        context.user_data["state"] = STATE_IDLE
-        context.user_data["programs_mode"] = True
-        context.user_data["idle_menu"] = "about"
+        try:
+            if update.effective_user is not None:
+                log_ux_sync(
+                    candidate_id=int(candidate_id),
+                    telegram_user_id=str(update.effective_user.id),
+                    state=STATE_MAIN,
+                    action="tap_programs",
+                    expected_action="select_program_question",
+                )
+        except Exception:
+            pass
+        context.user_data["state"] = STATE_PROGRAMS
         await safe_reply_text(
             update.message,
             "✅ برنامه‌های نماینده\n\nیکی از سوال‌های زیر را انتخاب کنید:",
@@ -1417,8 +2834,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == BTN_FEEDBACK or text == BTN_FEEDBACK_LEGACY:
-        context.user_data["programs_mode"] = False
-        context.user_data["idle_menu"] = "main"
+        try:
+            if update.effective_user is not None:
+                log_ux_sync(
+                    candidate_id=int(candidate_id),
+                    telegram_user_id=str(update.effective_user.id),
+                    state=STATE_MAIN,
+                    action="tap_feedback",
+                    expected_action="enter_feedback_text",
+                )
+                track_path_sync(candidate_id=int(candidate_id), path="main->comment")
+        except Exception:
+            pass
+        try:
+            track_flow_event_sync(candidate_id=int(candidate_id), flow_type="comment", event="flow_started")
+        except Exception:
+            pass
         context.user_data["state"] = STATE_FEEDBACK_TEXT
         context.user_data.pop("feedback_topic", None)
         await safe_reply_text(update.message, _build_feedback_intro_text(socials), reply_markup=build_back_keyboard())
@@ -1426,19 +2857,89 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == BTN_QUESTION:
-        context.user_data["programs_mode"] = False
-        context.user_data["idle_menu"] = "main"
-        context.user_data["state"] = STATE_QUESTION_CATEGORY
-        await safe_reply_text(
-            update.message,
-            "دسته‌بندی سؤال را انتخاب کنید (پاسخ‌ها عمومی هستند و پاسخ فردی نداریم):",
-            reply_markup=build_question_category_keyboard(),
-        )
+        try:
+            if update.effective_user is not None:
+                log_ux_sync(
+                    candidate_id=int(candidate_id),
+                    telegram_user_id=str(update.effective_user.id),
+                    state=STATE_MAIN,
+                    action="tap_question",
+                    expected_action="choose_view_or_ask",
+                )
+                track_path_sync(candidate_id=int(candidate_id), path="main->question")
+        except Exception:
+            pass
+        # Strict flow SCREEN 1 (exactly two buttons)
+        context.user_data["state"] = STATE_QUESTION_ENTRY
+        await safe_reply_text(update.message, "سؤال از نماینده\nیکی را انتخاب کنید:", reply_markup=build_question_entry_keyboard())
+        return
+
+    # Legacy buttons: route into strict flow safely
+    if text == BTN_REGISTER_QUESTION:
+        context.user_data["state"] = STATE_QUESTION_ASK_ENTRY
+        await safe_reply_text(update.message, "برای ثبت سؤال جدید، مرحله بعد را انجام دهید.", reply_markup=build_question_ask_entry_keyboard())
+        return
+        try:
+            track_flow_event_sync(candidate_id=int(candidate_id), flow_type="question", event="flow_started")
+        except Exception:
+            pass
+        context.user_data["state"] = STATE_QUESTION_TEXT
+        await safe_reply_text(update.message, "متن سؤال‌تان را ارسال کنید (۱۰ تا ۵۰۰ کاراکتر):", reply_markup=build_back_keyboard())
+        return
+
+    if text == BTN_SEARCH_QUESTION:
+        context.user_data["state"] = STATE_QUESTION_VIEW_METHOD
+        await safe_reply_text(update.message, "برای مشاهده سؤال‌ها، یکی را انتخاب کنید:", reply_markup=build_question_view_method_keyboard())
+        return
+
+    # Category selection (legacy handler). Avoid hijacking when user is not in a question flow.
+    if text.startswith("🗂") and state in {STATE_QUESTION_MENU, STATE_QUESTION_CATEGORY, STATE_QUESTION_VIEW_CATEGORY}:
+        chosen = (text.replace("🗂", "").strip() or "")
+        if chosen not in QUESTION_CATEGORIES:
+            await safe_reply_text(update.message, "دسته‌بندی نامعتبر است.", reply_markup=build_question_hub_keyboard())
+            return
+
+        def _get_category_answered(cid: int, topic: str) -> list[BotSubmission]:
+            db = SessionLocal()
+            try:
+                q = (
+                    db.query(BotSubmission)
+                    .filter(
+                        BotSubmission.candidate_id == int(cid),
+                        BotSubmission.type == "QUESTION",
+                        BotSubmission.status == "ANSWERED",
+                        BotSubmission.is_public == True,  # noqa: E712
+                        BotSubmission.answer.isnot(None),
+                        BotSubmission.topic == topic,
+                    )
+                    .order_by(BotSubmission.answered_at.desc(), BotSubmission.id.desc())
+                    .limit(10)
+                )
+                return q.all()
+            finally:
+                db.close()
+
+        rows = await run_db_query(_get_category_answered, candidate_id, chosen)
+        if not rows:
+            context.user_data["state"] = STATE_QUESTION_MENU
+            await safe_reply_text(update.message, f"در دسته «{chosen}» هنوز پاسخ عمومی ثبت نشده است.", reply_markup=build_question_hub_keyboard())
+            return
+
+        blocks: list[str] = []
+        for r in rows:
+            q_txt = _normalize_text(getattr(r, "text", ""))
+            a_txt = _normalize_text(getattr(r, "answer", ""))
+            if q_txt and a_txt:
+                rid = getattr(r, "id", None)
+                is_featured = bool(getattr(r, "is_featured", False))
+                badge = " ⭐" if is_featured else ""
+                code_line = f"\n🔖 کد سؤال: {rid}{badge}" if rid is not None else ""
+                blocks.append(f"❓ {q_txt}\n✅ {a_txt}{code_line}")
+        context.user_data["state"] = STATE_QUESTION_MENU
+        await safe_reply_text(update.message, f"🗂 {chosen}\n\n" + "\n\n".join(blocks), reply_markup=build_question_hub_keyboard())
         return
 
     if text == BTN_CONTACT:
-        context.user_data["programs_mode"] = False
-        context.user_data["idle_menu"] = "about"
         bot_config = candidate.get('bot_config') or {}
         offices = bot_config.get('offices')
         if not isinstance(offices, list):
@@ -1463,7 +2964,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lines.append(f"☎️ {phone}")
                 blocks.append("\n".join(lines))
             if blocks:
-                await safe_reply_text(update.message, "📍 آدرس ستادها\n\n" + "\n\n".join(blocks), reply_markup=build_back_keyboard())
+                await safe_reply_text(update.message, "☎️ ارتباط با نماینده\n\n" + "\n\n".join(blocks), reply_markup=build_back_keyboard())
                 return
 
         response = f"شماره تماس: {candidate.get('phone') or '---'}\n"
@@ -1480,410 +2981,88 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_reply_text(update.message, response.strip(), reply_markup=build_back_keyboard())
         return
 
-    if text == BTN_COMMITMENTS:
-        context.user_data["programs_mode"] = False
-        context.user_data["idle_menu"] = "main"
-
-        def _get_commitments(cid: int) -> list[BotCommitment]:
-            db = SessionLocal()
-            try:
-                return (
-                    db.query(BotCommitment)
-                    .filter(BotCommitment.candidate_id == int(cid))
-                    .order_by(BotCommitment.created_at.asc(), BotCommitment.id.asc())
-                    .all()
-                )
-            finally:
-                db.close()
-
-        rows = await run_db_query(_get_commitments, int(candidate_id))
-        parts: list[str] = ["📜 *تعهدات نماینده*", "", _commitments_banner_md(), ""]
-
-        if rows:
-            parts.append("🔒 *لیست تعهدات*")
-            for r in rows:
-                parts.append(
-                    _format_commitment_pre_md(
-                        _normalize_text(getattr(r, "title", "")),
-                        _normalize_text(getattr(r, "body", "")),
-                        getattr(r, "created_at", None),
-                        _normalize_text(getattr(r, "status", "")),
-                        bool(getattr(r, "locked", True)),
-                    )
-                )
-        else:
-            parts.append("ℹ️ هنوز تعهدی ثبت نشده است.")
-
-        await safe_reply_text(update.message, "\n".join(parts).strip(), parse_mode="Markdown", reply_markup=build_back_keyboard())
-
-        # Mandatory first commitment prompt (admin-only)
-        if not rows and _is_bot_admin(update):
-            await safe_reply_text(
-                update.message,
-                "❓ *تعهد اول (اجباری)*\nپل ارتباطی رسمی نماینده با مردم چیست؟",
-                parse_mode="Markdown",
-                reply_markup=_first_commitment_keyboard(),
-            )
-        return
-
-    if text == BTN_ABOUT_MENU:
-        context.user_data["programs_mode"] = False
-        context.user_data["idle_menu"] = "about"
-        await safe_reply_text(update.message, "📂 درباره نماینده", reply_markup=build_about_keyboard())
-        return
-
-    if text == BTN_OTHER_MENU:
-        context.user_data["programs_mode"] = False
-        context.user_data["idle_menu"] = "other"
-        await safe_reply_text(update.message, "⚙️ سایر امکانات", reply_markup=build_other_keyboard())
-        return
-
-    if text == BTN_ABOUT_BOT:
-        context.user_data["programs_mode"] = False
-        context.user_data["idle_menu"] = "other"
-        msg = (
-            "ℹ️ *درباره این بات*\n\n"
-            "این بات برای اطلاع‌رسانی رسمی، ثبت سؤال و ثبت نظر/دغدغه طراحی شده است.\n"
-            "پاسخ‌ها به‌صورت عمومی منتشر می‌شوند و گفتگوی مستقیم/پاسخ شخصی ندارد."
-        )
-        await safe_reply_text(update.message, msg, parse_mode="Markdown", reply_markup=build_other_keyboard())
-        return
-
-
     if text == BTN_BUILD_BOT:
-        context.user_data["programs_mode"] = False
-        context.user_data["idle_menu"] = "other"
-        context.user_data["state"] = STATE_LEAD_ROLE
         await safe_reply_text(
             update.message,
-            "برای ساخت بات اختصاصی، چند اطلاعات کوتاه می‌گیریم.\n"
-            "توجه: این بخش برای دریافت درخواست است و گفتگوی مستقیم/پاسخ شخصی ندارد.\n\n"
-            "نقش شما کدام است؟",
-            reply_markup=build_bot_request_role_keyboard(),
+            "این بات نمونه‌ای از بات ارتباط مستقیم نماینده با مردم است.\n\n"
+            "اگر شما نماینده، کاندیدا یا فعال سیاسی هستید،\n"
+            "می‌توانید بات اختصاصی خودتان را داشته باشید.\n\n"
+            "- معرفی رسمی نماینده\n"
+            "- دریافت نظر و دغدغه مردم\n"
+            "- پاسخ‌گویی شفاف به سؤالات\n"
+            "- انتشار برنامه‌ها\n"
+            "- اعلان پاسخ‌ها\n"
+            "- پنل مدیریت اختصاصی",
+            reply_markup=build_bot_request_cta_keyboard(),
         )
         return
 
-    # Idle behavior: ignore free text, re-render current idle menu.
-    if state == STATE_IDLE:
-        await safe_reply_text(update.message, "لطفاً از دکمه‌های زیر استفاده کنید 👇", reply_markup=_current_idle_keyboard(context))
-        return
-
-    # Safety fallback: keep current state unless user hits Back.
-    await safe_reply_text(update.message, "لطفاً از دکمه‌ها استفاده کنید یا «بازگشت» را بزنید.")
-
-
-async def vote_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
-        return
-
-    data = _normalize_text(getattr(query, "data", ""))
-    m = re.fullmatch(r"vote:(\d+)", data)
-    if not m:
-        return
-    submission_id = int(m.group(1))
-    candidate_id = context.bot_data.get("candidate_id")
-    user = update.effective_user
-    if not candidate_id or not user:
-        return
-
-    telegram_user_id = str(user.id)
-
-    def _can_vote_and_apply(cid: int, sid: int, tuid: str) -> tuple[bool, int, bool]:
-        """Returns (voted_now, new_count, reached_threshold)."""
-        db = SessionLocal()
+    if text == BTN_BOT_REQUEST:
         try:
-            row = (
-                db.query(BotSubmission)
-                .filter(
-                    BotSubmission.id == int(sid),
-                    BotSubmission.candidate_id == int(cid),
-                    BotSubmission.type == "QUESTION",
-                    BotSubmission.status == "ANSWERED",
-                    BotSubmission.is_public == True,  # noqa: E712
-                )
-                .first()
-            )
-            if not row:
-                return (False, 0, False)
-
-            exists = (
-                db.query(BotQuestionVote)
-                .filter(
-                    BotQuestionVote.submission_id == int(sid),
-                    BotQuestionVote.telegram_user_id == tuid,
-                )
-                .first()
-            )
-            if exists:
-                count = (
-                    db.query(func.count(BotQuestionVote.id))
-                    .filter(BotQuestionVote.submission_id == int(sid))
-                    .scalar()
-                )
-                return (False, int(count or 0), False)
-
-            vote = BotQuestionVote(candidate_id=int(cid), submission_id=int(sid), telegram_user_id=tuid)
-            db.add(vote)
-            db.commit()
-
-            count = (
-                db.query(func.count(BotQuestionVote.id))
-                .filter(BotQuestionVote.submission_id == int(sid))
-                .scalar()
-            )
-            count_int = int(count or 0)
-
-            # Threshold -> mark featured (High Priority)
-            threshold = 10
-            try:
-                cand = db.query(User).filter(User.id == int(cid), User.role == "CANDIDATE").first()
-                cfg = cand.bot_config if cand and isinstance(cand.bot_config, dict) else {}
-                raw = cfg.get("vote_threshold") or cfg.get("voteThreshold")
-                threshold = int(raw) if raw is not None else 10
-                if threshold <= 0:
-                    threshold = 10
-            except Exception:
-                threshold = 10
-
-            reached = False
-            if count_int >= threshold and not bool(getattr(row, "is_featured", False)):
-                row.is_featured = True
-                reached = True
-                db.add(row)
-                db.commit()
-
-            return (True, count_int, reached)
-        finally:
-            db.close()
-
-    voted_now, new_count, reached = await run_db_query(_can_vote_and_apply, int(candidate_id), submission_id, telegram_user_id)
-    if new_count == 0 and not voted_now:
-        await query.answer("این سؤال یافت نشد یا قابل رأی‌دادن نیست.", show_alert=True)
-        return
-    if not voted_now:
-        await query.answer("قبلاً برای این سؤال رأی داده‌اید.")
-        return
-    msg = f"✅ رأی شما ثبت شد. (تعداد: {new_count})"
-    if reached:
-        msg += "\n⭐ این سؤال به اولویت بالا رسید."
-    await query.answer(msg)
-
-
-async def commitment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
+            track_flow_event_sync(candidate_id=int(candidate_id), flow_type="lead", event="flow_started")
+        except Exception:
+            pass
+        # If lead flow starts from Other menu, return there on back.
+        if context.user_data.get("state") == STATE_OTHER_MENU:
+            context.user_data["_return_state"] = STATE_OTHER_MENU
+        context.user_data["state"] = STATE_BOTREQ_NAME
+        await safe_reply_text(update.message, "نام و نام خانوادگی را وارد کنید:", reply_markup=build_back_keyboard())
         return
 
-    data = _normalize_text(getattr(query, "data", ""))
-    m = re.fullmatch(r"commit:first:([a-z_]+)", data)
-    if not m:
-        return
-
-    if not _is_bot_admin(update):
-        await query.answer("دسترسی ندارید.", show_alert=True)
-        return
-
-    candidate_id = context.bot_data.get("candidate_id")
-    if not candidate_id:
-        await query.answer("خطا: شناسه کاندیدا یافت نشد.", show_alert=True)
-        return
-
-    choice_key = m.group(1)
-    option_map = {
-        "official_bot": "همین بات رسمی ✅",
-        "in_person": "ستادهای حضوری",
-        "phone": "تماس تلفنی",
-        "socials": "شبکه‌های اجتماعی",
-        "mixed": "ترکیبی",
-    }
-    chosen = option_map.get(choice_key)
-    if not chosen:
-        await query.answer("گزینه نامعتبر است.", show_alert=True)
-        return
-
-    title = "پل ارتباطی رسمی نماینده با مردم چیست؟"
-    body = f"پاسخ: {chosen}"
-
-    def _insert_first_commitment(cid: int) -> bool:
-        db = SessionLocal()
-        try:
-            exists = (
-                db.query(BotCommitment)
-                .filter(BotCommitment.candidate_id == int(cid), BotCommitment.key == "official_bridge")
-                .first()
-            )
-            if exists:
-                return False
-            row = BotCommitment(
-                candidate_id=int(cid),
-                key="official_bridge",
-                title=title,
-                body=body,
-                status="Active",
-                locked=True,
-            )
-            db.add(row)
-            db.commit()
-            return True
-        finally:
-            db.close()
-
-    created = await run_db_query(_insert_first_commitment, int(candidate_id))
-    if not created:
-        await query.answer("این تعهد قبلاً ثبت شده است.")
-    else:
-        await query.answer("✅ تعهد ثبت شد.")
-
-    # Refresh the commitments view
+    # No free chat in MVP V1
     try:
-        await query.message.reply_text("لطفاً از دکمه‌های زیر استفاده کنید 👇", reply_markup=build_main_keyboard())
+        if update.effective_user is not None:
+            log_ux_sync(
+                candidate_id=int(candidate_id),
+                telegram_user_id=str(update.effective_user.id),
+                state=state,
+                action="text_sent_in_idle_state" if state == STATE_MAIN else "unexpected_text_input",
+                expected_action="tap_menu_button" if state == STATE_MAIN else "use_flow_buttons",
+            )
     except Exception:
         pass
 
+    # IMPORTANT: Do NOT auto-return to main menu during active flows.
+    if state == STATE_MAIN:
+        context.user_data["state"] = STATE_MAIN
+        await safe_reply_text(update.message, "لطفاً یکی از گزینه‌های منو را انتخاب کنید.", reply_markup=build_main_keyboard())
+        return
 
-async def publish_loop(app: Application, *, candidate_id: int) -> None:
-    """Background publisher: announces newly public answered questions into a forum topic per category."""
-    while True:
-        try:
-            def _fetch_pending(cid: int) -> list[int]:
-                db = SessionLocal()
-                try:
-                    subq = (
-                        db.query(BotSubmission.id)
-                        .filter(
-                            BotSubmission.candidate_id == int(cid),
-                            BotSubmission.type == "QUESTION",
-                            BotSubmission.status == "ANSWERED",
-                            BotSubmission.is_public == True,  # noqa: E712
-                            BotSubmission.answer.isnot(None),
-                        )
-                        .order_by(BotSubmission.answered_at.asc().nullslast(), BotSubmission.id.asc())
-                        .limit(10)
-                        .all()
-                    )
-                    ids = [int(x[0]) for x in subq]
-                    if not ids:
-                        return []
-                    published = (
-                        db.query(BotSubmissionPublishLog.submission_id)
-                        .filter(
-                            BotSubmissionPublishLog.candidate_id == int(cid),
-                            BotSubmissionPublishLog.submission_id.in_(ids),
-                        )
-                        .all()
-                    )
-                    published_ids = {int(x[0]) for x in published}
-                    return [i for i in ids if i not in published_ids]
-                finally:
-                    db.close()
+    if state == STATE_ABOUT_MENU:
+        await safe_reply_text(update.message, "لطفاً یکی از گزینه‌های «درباره نماینده» را انتخاب کنید یا «بازگشت» را بزنید.", reply_markup=build_about_keyboard())
+        return
 
-            pending_ids = await run_db_query(_fetch_pending, candidate_id)
-            if not pending_ids:
-                await asyncio.sleep(6)
-                continue
+    if state == STATE_OTHER_MENU:
+        await safe_reply_text(update.message, "لطفاً یکی از گزینه‌های «سایر امکانات» را انتخاب کنید یا «بازگشت» را بزنید.", reply_markup=build_other_keyboard())
+        return
 
-            for sid in pending_ids:
-                # Fetch full row + socials/bot_name
-                def _get_payload(cid: int, submission_id: int):
-                    db = SessionLocal()
-                    try:
-                        cand = db.query(User).filter(User.id == int(cid), User.role == "CANDIDATE").first()
-                        sub = db.query(BotSubmission).filter(BotSubmission.id == int(submission_id), BotSubmission.candidate_id == int(cid)).first()
-                        if not cand or not sub:
-                            return None
-                        return {
-                            "bot_name": cand.bot_name,
-                            "socials": cand.socials if isinstance(cand.socials, dict) else {},
-                            "bot_config": cand.bot_config if isinstance(cand.bot_config, dict) else {},
-                            "topic": _normalize_text(getattr(sub, "topic", "")),
-                            "q": _normalize_text(getattr(sub, "text", "")),
-                            "a": _normalize_text(getattr(sub, "answer", "")),
-                        }
-                    finally:
-                        db.close()
-
-                payload = await run_db_query(_get_payload, candidate_id, sid)
-                if not payload:
-                    continue
-
-                socials = payload.get("socials") or {}
-                group_chat_id = socials.get("telegram_group_chat_id") or socials.get("telegramGroupChatId")
-                if not group_chat_id:
-                    # Group is not configured yet; keep pending so it can be published later.
-                    continue
-
-                chat_id_int = int(group_chat_id)
-                category = payload.get("topic") or "عمومی"
-                bot_name = _normalize_text(payload.get("bot_name") or "").lstrip("@").strip()
-                deep_link = f"https://t.me/{bot_name}?start=question_{sid}" if bot_name else ""
-                code = _question_code(payload.get("bot_config") or {}, sid)
-
-                thread_id: int | None = None
-                # Reuse or create forum topic
-                def _get_thread(cid: int, chat_id: str, cat: str) -> int | None:
-                    db = SessionLocal()
-                    try:
-                        row = (
-                            db.query(BotForumTopic)
-                            .filter(
-                                BotForumTopic.candidate_id == int(cid),
-                                BotForumTopic.chat_id == str(chat_id),
-                                BotForumTopic.category == cat,
-                            )
-                            .first()
-                        )
-                        return int(row.thread_id) if row else None
-                    finally:
-                        db.close()
-
-                thread_id = await run_db_query(_get_thread, candidate_id, str(chat_id_int), category)
-                if thread_id is None:
-                    try:
-                        topic = await app.bot.create_forum_topic(chat_id=chat_id_int, name=category)
-                        thread_id = int(getattr(topic, "message_thread_id", None) or getattr(topic, "thread_id", None) or 0) or None
-                        if thread_id is not None:
-                            def _save_thread(cid: int, chat_id: str, cat: str, tid: int):
-                                db = SessionLocal()
-                                try:
-                                    db.add(BotForumTopic(candidate_id=int(cid), chat_id=str(chat_id), category=cat, thread_id=int(tid)))
-                                    db.commit()
-                                finally:
-                                    db.close()
-                            await run_db_query(_save_thread, candidate_id, str(chat_id_int), category, thread_id)
-                    except Exception:
-                        thread_id = None
-
-                text_msg = f"🔔 پاسخ جدید منتشر شد\n\n🔖 کد سؤال: {code}\n🏷 دسته: {category}\n\n❓ {payload.get('q')}\n\n✅ {payload.get('a')}"
-                if deep_link:
-                    text_msg += f"\n\n🔗 لینک مستقیم پاسخ: {deep_link}"
-
-                try:
-                    if thread_id is not None:
-                        await app.bot.send_message(chat_id=chat_id_int, text=text_msg, message_thread_id=thread_id)
-                    else:
-                        await app.bot.send_message(chat_id=chat_id_int, text=text_msg)
-                except Exception:
-                    logger.exception("Failed to publish answered question")
-                    continue
-
-                def _mark(cid: int, submission_id: int):
-                    db = SessionLocal()
-                    try:
-                        db.add(BotSubmissionPublishLog(candidate_id=int(cid), submission_id=int(submission_id)))
-                        db.commit()
-                    finally:
-                        db.close()
-                await run_db_query(_mark, candidate_id, sid)
-
-        except Exception:
-            logger.exception("publish_loop error")
-
-        await asyncio.sleep(6)
+    await safe_reply_text(update.message, "لطفاً یکی از گزینه‌ها را انتخاب کنید یا «بازگشت» را بزنید.", reply_markup=build_back_keyboard())
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error and send a telegram message to notify the developer."""
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
+
+    try:
+        candidate_id = context.bot_data.get("candidate_id") if hasattr(context, "bot_data") else None
+        telegram_user_id = None
+        state = None
+        if isinstance(update, Update):
+            if update.effective_user is not None:
+                telegram_user_id = str(update.effective_user.id)
+            if update.effective_message is not None and hasattr(context, "user_data"):
+                state = context.user_data.get("state")
+
+        err = context.error
+        log_technical_error_sync(
+            service_name="telegram_bot",
+            error_type=err.__class__.__name__ if err else "UnknownError",
+            error_message=str(err) if err else "Unknown error",
+            telegram_user_id=telegram_user_id,
+            candidate_id=int(candidate_id) if candidate_id is not None else None,
+            state=state,
+        )
+    except Exception:
+        pass
 
 
 async def debug_update_logger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1892,6 +3071,12 @@ async def debug_update_logger(update: Update, context: ContextTypes.DEFAULT_TYPE
     Placed in a separate handler group so it doesn't interfere with routing.
     """
     try:
+        # Monitoring heuristic: update receive timestamp
+        try:
+            context.bot_data["last_update_received_at"] = datetime.now(timezone.utc)
+        except Exception:
+            pass
+
         message = getattr(update, "effective_message", None)
         chat = getattr(update, "effective_chat", None)
         user = getattr(update, "effective_user", None)
@@ -1939,40 +3124,40 @@ async def run_bot(candidate: User):
             or (bot_config.get("telegramProxyUrl") if isinstance(bot_config, dict) else None)
             or (bot_config.get("proxy_url") if isinstance(bot_config, dict) else None)
             or (bot_config.get("proxyUrl") if isinstance(bot_config, dict) else None)
-            or _get_env("TELEGRAM_PROXY_URL")
+            or os.getenv("TELEGRAM_PROXY_URL")
         )
 
-        def _is_valid_proxy_url(value: str) -> bool:
-            v = _normalize_text(value)
-            if not v:
-                return False
+        # Normalize/guard proxy settings.
+        # We have seen environments where TELEGRAM_PROXY_URL is set globally to a local port
+        # (e.g. 127.0.0.1:10808) but the local proxy is flaky, causing the bot to receive
+        # updates but fail to send replies intermittently.
+        explicit_proxy_url = (str(explicit_proxy_url).strip() if explicit_proxy_url is not None else "") or None
+
+        if explicit_proxy_url and not _env_truthy("TELEGRAM_ALLOW_LOCAL_PROXY"):
             try:
-                u = urlsplit(v)
-                if u.scheme not in {"http", "https", "socks5", "socks5h"}:
-                    return False
-                if not u.hostname:
-                    return False
-                # urlsplit returns None when port is missing or not numeric.
-                if u.port is None:
-                    return False
-                return True
+                parsed = urlparse(explicit_proxy_url)
+                host = (parsed.hostname or "").lower()
+                port = int(parsed.port) if parsed.port is not None else None
+                if host in {"127.0.0.1", "localhost"} and port in {10808}:
+                    logger.warning(
+                        "Ignoring TELEGRAM_PROXY_URL pointing to a local proxy (%s:%s). "
+                        "Set TELEGRAM_ALLOW_LOCAL_PROXY=1 to force using it.",
+                        host,
+                        port,
+                    )
+                    explicit_proxy_url = None
             except Exception:
-                return False
+                # If parsing fails, keep the value as-is.
+                pass
 
-        if explicit_proxy_url and not _is_valid_proxy_url(str(explicit_proxy_url)):
-            logger.error(
-                "Invalid Telegram proxy URL. Provide a full URL like http://HOST:PORT or http://USER:PASS@HOST:PORT. "
-                "If you want SOCKS proxies, install httpx[socks] and use socks5://HOST:PORT."
-            )
-            explicit_proxy_url = None
-
-        def _env_truthy(name: str) -> bool:
-            v = (_get_env(name) or "").strip().lower()
-            return v in {"1", "true", "yes", "y", "on"}
-
-        # IMPORTANT: Many Windows environments have HTTP(S)_PROXY/ALL_PROXY set by other tools.
-        # These can break Telegram connectivity. We default to trust_env=False unless explicitly enabled.
-        trust_env = _env_truthy("TELEGRAM_TRUST_ENV") and not bool(explicit_proxy_url)
+        # IMPORTANT: Many environments have HTTP(S)_PROXY/ALL_PROXY set by other tools.
+        # Some networks require these proxies for Telegram; others work better without them.
+        # If TELEGRAM_TRUST_ENV is explicitly set, honor it. Otherwise auto-detect once.
+        trust_env_raw = (os.getenv("TELEGRAM_TRUST_ENV") or "").strip()
+        if trust_env_raw:
+            trust_env = _env_truthy("TELEGRAM_TRUST_ENV") and not bool(explicit_proxy_url)
+        else:
+            trust_env = (not bool(explicit_proxy_url)) and _auto_decide_trust_env_for_telegram()
 
         if explicit_proxy_url:
             logger.info(f"Using explicit Telegram proxy for candidate_id={candidate.id}")
@@ -1980,20 +3165,30 @@ async def run_bot(candidate: User):
             if trust_env:
                 logger.info("Telegram: trust_env=True (using system proxy env)")
             else:
-                logger.warning(
-                    "Telegram: no explicit proxy; ignoring system proxy env (trust_env=False). "
-                    "If you rely on system proxy, set TELEGRAM_TRUST_ENV=1; otherwise set TELEGRAM_PROXY_URL."
-                )
+                logger.info("Telegram: trust_env=False (direct connection; ignoring system proxy env)")
 
-        request = HTTPXRequest(
+        request_kwargs = dict(
             connection_pool_size=8,
-            proxy_url=explicit_proxy_url or None,
-            read_timeout=20,
+            # Long polling can legitimately hold the connection for >20s.
+            # Keep read_timeout comfortably above Telegram's getUpdates long-poll duration
+            # to avoid treating normal polling as a fatal timeout.
+            read_timeout=90,
             write_timeout=20,
             connect_timeout=20,
             pool_timeout=5,
             httpx_kwargs={"trust_env": trust_env},
         )
+        if explicit_proxy_url:
+            # PTB v20.7+ prefers `proxy` over `proxy_url`.
+            request_kwargs["proxy"] = explicit_proxy_url
+
+        try:
+            request = HTTPXRequest(**request_kwargs)
+        except TypeError:
+            # Backward compatibility with older PTB that still expects `proxy_url`.
+            if "proxy" in request_kwargs:
+                request_kwargs["proxy_url"] = request_kwargs.pop("proxy")
+            request = HTTPXRequest(**request_kwargs)
         
         application = Application.builder().token(candidate.bot_token).request(request).build()
         
@@ -2003,8 +3198,6 @@ async def run_bot(candidate: User):
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("chatid", chatid_command))
         application.add_handler(CommandHandler("myid", myid_command))
-        application.add_handler(CallbackQueryHandler(vote_callback, pattern=r"^vote:\d+$"))
-        application.add_handler(CallbackQueryHandler(commitment_callback, pattern=r"^commit:first:[a-z_]+$"))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         # Logs all updates in a later group to avoid interfering with main routing.
         application.add_handler(MessageHandler(filters.ALL, debug_update_logger), group=1)
@@ -2012,19 +3205,38 @@ async def run_bot(candidate: User):
 
         await application.initialize()
         await application.start()
+
+        # Ensure polling mode works: if a webhook is set, Telegram can reject getUpdates.
+        # This is safe for an MVP polling runner.
+        try:
+            await application.bot.delete_webhook(drop_pending_updates=False)
+        except Exception:
+            pass
+
         # Don't silently drop /start messages if the bot was down.
         await application.updater.start_polling(drop_pending_updates=False)
 
-        # Background publisher for newly answered questions.
-        application.create_task(publish_loop(application, candidate_id=candidate.id))
+        # Background minimal health checks (monitoring MVP).
+        application.create_task(health_check_loop(application, candidate_id=candidate.id))
         
         logger.info(f"Bot for {candidate.full_name} is running.")
         
         # Keep the bot running
         return application
 
-    except Exception as e:
-        logger.error(f"Failed to start bot for {candidate.full_name}: {e}")
+    except Exception:
+        logger.exception(f"Failed to start bot for {candidate.full_name}")
+        try:
+            log_technical_error_sync(
+                service_name="telegram_bot",
+                error_type="StartFailed",
+                error_message=f"Failed to start polling for candidate_id={getattr(candidate, 'id', None)}: {e}",
+                telegram_user_id=None,
+                candidate_id=int(getattr(candidate, "id", 0) or 0) or None,
+                state=None,
+            )
+        except Exception:
+            pass
         return None
 
 # Global dictionary to track running bots: candidate_id -> Application
@@ -2142,7 +3354,7 @@ async def main():
 if __name__ == "__main__":
     try:
         # Prevent multiple bot_runner processes on the same machine.
-        acquire_single_instance_lock(os.path.join(os.path.dirname(__file__), LOCK_FILENAME))
+        acquire_single_instance_lock(_default_lock_path())
         asyncio.run(main())
     except KeyboardInterrupt:
         pass

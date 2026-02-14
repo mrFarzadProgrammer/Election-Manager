@@ -9,6 +9,8 @@ import TicketsTab from './TicketsTab';
 import AnnouncementsTab from './AnnouncementsTab';
 import DashboardTab from './DashboardTab';
 import BotRequestsTab from './BotRequestsTab';
+import MvpLearningTab from './MvpLearningTab';
+import MonitoringTab from './MonitoringTab';
 
 interface AdminPanelProps {
     candidates: CandidateData[];
@@ -21,7 +23,7 @@ interface AdminPanelProps {
 }
 
 const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plans, setPlans, tickets, setTickets, onLogout }) => {
-    const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'CANDIDATES' | 'PLANS' | 'TICKETS' | 'ANNOUNCEMENTS' | 'BOT_REQUESTS'>('DASHBOARD');
+    const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'CANDIDATES' | 'PLANS' | 'TICKETS' | 'ANNOUNCEMENTS' | 'BOT_REQUESTS' | 'MVP_LEARNING' | 'MONITORING'>('DASHBOARD');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -218,6 +220,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
 
     const navItems = [
         { id: 'DASHBOARD', label: 'داشبورد', icon: <LayoutDashboard size={20} /> },
+        { id: 'MVP_LEARNING', label: 'یادگیری', icon: <CheckSquare size={20} /> },
+        { id: 'MONITORING', label: 'Monitoring', icon: <CheckSquare size={20} /> },
         { id: 'CANDIDATES', label: 'کاندیداها', icon: <Users size={20} /> },
         { id: 'PLANS', label: 'پلن‌ها', icon: <CreditCard size={20} /> },
         { id: 'BOT_REQUESTS', label: 'درخواست ساخت بات', icon: <Bot size={20} /> },
@@ -289,6 +293,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
                 <div className='flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 lg:p-8'>
                     <div className='w-full mx-auto'>
                         {activeTab === 'DASHBOARD' && <DashboardTab candidates={candidates} plans={plans} tickets={tickets} onTabChange={setActiveTab} />}
+                        {activeTab === 'MVP_LEARNING' && <MvpLearningTab />}
+                        {activeTab === 'MONITORING' && <MonitoringTab />}
                         {activeTab === 'CANDIDATES' && <CandidatesManagement candidates={candidates} plans={plans} searchQuery={searchQuery} setSearchQuery={setSearchQuery} onEdit={handleEditCandidate} onDelete={handleDeleteCandidate} onToggleStatus={handleToggleStatus} onAdd={handleAddCandidate} onResetPassword={handleResetPassword} onAssignPlan={handleAssignPlan} />}
                         {activeTab === 'PLANS' && <PlansTab plans={plans} onSavePlan={handleSavePlan} onDeletePlan={handleDeletePlan} />}
                         {activeTab === 'BOT_REQUESTS' && <BotRequestsTab />}

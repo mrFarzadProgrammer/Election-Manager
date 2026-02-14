@@ -24,6 +24,7 @@ import FixedProgramsV1 from './v1/FixedProgramsV1';
 import OfficesV1 from './v1/OfficesV1';
 import PublicFeedbackV1 from './v1/PublicFeedbackV1';
 import PublicQuestionsV1 from './v1/PublicQuestionsV1';
+import CommitmentsV1 from './v1/CommitmentsV1';
 import LockedFeatureNotice from './v1/LockedFeatureNotice';
 import ResultModal from './ui/ResultModal';
 
@@ -37,7 +38,7 @@ interface CandidatePanelProps {
 }
 
 const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, plans, tickets, setTickets, onLogout }) => {
-    const [activeTab, setActiveTab] = useState<'PROFILE' | 'VOICE' | 'RESUME' | 'PROGRAMS' | 'OFFICES' | 'PUBLIC_MESSAGES' | 'PUBLIC_QUESTIONS' | 'BOT_SETTINGS' | 'PLANS' | 'TICKETS' | 'NOTIFICATIONS'>('PROFILE');
+    const [activeTab, setActiveTab] = useState<'PROFILE' | 'VOICE' | 'RESUME' | 'PROGRAMS' | 'OFFICES' | 'COMMITMENTS' | 'PUBLIC_MESSAGES' | 'PUBLIC_QUESTIONS' | 'BOT_SETTINGS' | 'PLANS' | 'TICKETS' | 'NOTIFICATIONS'>('PROFILE');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [announcements, setAnnouncements] = useState<Announcement[]>([]);
     const [isUploading, setIsUploading] = useState(false);
@@ -128,6 +129,7 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                         <button onClick={() => trySetTab('RESUME')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'RESUME' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><FileText size={20} /> سوابق</button>
                         <button onClick={() => trySetTab('PROGRAMS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PROGRAMS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><ListChecks size={20} /> برنامه‌ها</button>
                         <button onClick={() => trySetTab('OFFICES')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'OFFICES' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><MapPin size={20} /> ستادها</button>
+                        <button onClick={() => trySetTab('COMMITMENTS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'COMMITMENTS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><FileText size={20} /> تعهدات</button>
                         <button onClick={() => trySetTab('PUBLIC_MESSAGES')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PUBLIC_MESSAGES' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Users size={20} /> نظرات و دغدغه‌ها</button>
                         <button onClick={() => trySetTab('PUBLIC_QUESTIONS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PUBLIC_QUESTIONS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><HelpCircle size={20} /> سؤال‌های مردمی</button>
 
@@ -223,6 +225,7 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                             {activeTab === 'RESUME' && <StructuredResumeV1 candidate={candidate} onUpdate={onUpdate} />}
                             {activeTab === 'PROGRAMS' && <FixedProgramsV1 candidate={candidate} onUpdate={onUpdate} />}
                             {activeTab === 'OFFICES' && <OfficesV1 candidate={candidate} onUpdate={onUpdate} />}
+                            {activeTab === 'COMMITMENTS' && <CommitmentsV1 candidate={candidate} />}
                             {activeTab === 'PUBLIC_MESSAGES' && <PublicFeedbackV1 candidate={candidate} />}
                             {activeTab === 'PUBLIC_QUESTIONS' && <PublicQuestionsV1 candidate={candidate} />}
                             {lockedTabs.has(activeTab) && <LockedFeatureNotice />}

@@ -1,4 +1,6 @@
 # models.py
+import uuid
+
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
@@ -131,6 +133,16 @@ class BotUserRegistry(Base):
     first_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    # MVP behavior/export fields
+    platform = Column(String, default="TELEGRAM", nullable=False)
+    total_interactions = Column(Integer, default=0, nullable=False)
+    asked_question = Column(Boolean, default=False, nullable=False)
+    left_comment = Column(Boolean, default=False, nullable=False)
+    viewed_commitment = Column(Boolean, default=False, nullable=False)
+    became_lead = Column(Boolean, default=False, nullable=False)
+    selected_role = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+
     __table_args__ = (
         UniqueConstraint("candidate_id", "telegram_user_id", name="uq_bot_user_registry_candidate_telegram"),
     )
@@ -167,6 +179,10 @@ class BotSubmission(Base):
     answered_at = Column(DateTime, nullable=True)
     is_public = Column(Boolean, default=False)
     is_featured = Column(Boolean, default=False)
+
+    # Learning counters (MVP)
+    answer_views_count = Column(Integer, default=0, nullable=False)
+    channel_click_count = Column(Integer, default=0, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -225,14 +241,56 @@ class BotCommitment(Base):
     title = Column(String, nullable=False)
     body = Column(Text, nullable=False)
 
-    status = Column(String, default="Active", nullable=False)
-    locked = Column(Boolean, default=True, nullable=False)
+    # Contract fields (Commitments v1)
+    category = Column(String, nullable=True)
+
+    # Publication/locking rules:
+    # - draft: published_at=NULL, locked=False
+    # - published: published_at!=NULL, locked=True
+    published_at = Column(DateTime, nullable=True)
+
+    # draft | active | in_progress | completed | failed
+    status = Column(String, default="draft", nullable=False)
+    status_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    locked = Column(Boolean, default=False, nullable=False)
+
+    view_count = Column(Integer, default=0, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    progress_logs = relationship(
+        "CommitmentProgressLog",
+        back_populates="commitment",
+        cascade="all, delete-orphan",
+        order_by="CommitmentProgressLog.created_at.asc()",
+    )
 
     __table_args__ = (
         UniqueConstraint("candidate_id", "key", name="uq_bot_commitment_candidate_key"),
     )
+
+
+class CommitmentTermsAcceptance(Base):
+    __tablename__ = "commitment_terms_acceptances"
+
+    id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
+    representative_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False, unique=True)
+    accepted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(Text, nullable=True)
+    version = Column(String, default="v1", nullable=False)
+
+
+class CommitmentProgressLog(Base):
+    __tablename__ = "bot_commitment_progress_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    commitment_id = Column(Integer, ForeignKey("bot_commitments.id"), index=True, nullable=False)
+    note = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    commitment = relationship("BotCommitment", back_populates="progress_logs")
 
 class Announcement(Base):
     __tablename__ = "announcements"
@@ -243,3 +301,121 @@ class Announcement(Base):
     attachments = Column(JSON, nullable=True) # List of {url, type}
     created_at = Column(DateTime, default=datetime.utcnow)
     created_at_jalali = Column(String, nullable=True)
+
+
+class BotBehaviorCounter(Base):
+    __tablename__ = "bot_behavior_counters"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # candidate_id can be NULL to represent global counters
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    event = Column(String, index=True, nullable=False)
+    count = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "event", name="uq_bot_behavior_candidate_event"),
+    )
+
+
+class BotFlowPathCounter(Base):
+    __tablename__ = "bot_flow_path_counters"
+
+    id = Column(Integer, primary_key=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    path = Column(String, nullable=False)
+    count = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "path", name="uq_bot_flowpath_candidate_path"),
+    )
+
+
+class BotUxLog(Base):
+    __tablename__ = "bot_ux_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    telegram_user_id = Column(String, index=True, nullable=False)
+    state = Column(String, nullable=True)
+    action = Column(String, index=True, nullable=False)
+    expected_action = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class BotUserSession(Base):
+    __tablename__ = "bot_user_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    telegram_user_id = Column(String, index=True, nullable=False)
+
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_event_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+    close_reason = Column(String, nullable=True)  # flow_timeout | manual
+
+    has_interaction = Column(Boolean, default=False, nullable=False)
+    path = Column(String, nullable=False, default="start")
+
+    # Per-session flags to drive aggregated counters (start -> X)
+    saw_ask_question = Column(Boolean, default=False, nullable=False)
+    saw_view_commitments = Column(Boolean, default=False, nullable=False)
+    saw_about_representative = Column(Boolean, default=False, nullable=False)
+    saw_other_features = Column(Boolean, default=False, nullable=False)
+    saw_lead_request = Column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "telegram_user_id", "closed_at", name="uq_bot_session_open_by_user"),
+    )
+
+
+class AdminExportLog(Base):
+    __tablename__ = "admin_export_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    admin_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    export_type = Column(String, nullable=True)
+    filters = Column(JSON, nullable=True)
+
+
+class TechnicalErrorLog(Base):
+    __tablename__ = "technical_error_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    service_name = Column(String, nullable=False, index=True)
+    error_type = Column(String, nullable=False, index=True)
+    error_message = Column(Text, nullable=False)
+
+    telegram_user_id = Column(String, index=True, nullable=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    state = Column(String, nullable=True)
+
+
+class BotHealthCheck(Base):
+    __tablename__ = "bot_health_checks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    check_type = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, index=True)  # ok | failed
+
+
+class BotFlowDropCounter(Base):
+    __tablename__ = "bot_flow_drop_counters"
+
+    id = Column(Integer, primary_key=True, index=True)
+    candidate_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+    flow_type = Column(String, nullable=False, index=True)  # question | lead | comment
+    started_count = Column(Integer, default=0, nullable=False)
+    completed_count = Column(Integer, default=0, nullable=False)
+    abandoned_count = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "flow_type", name="uq_bot_flowdrop_candidate_flow"),
+    )

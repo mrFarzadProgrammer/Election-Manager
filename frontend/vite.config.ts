@@ -9,7 +9,17 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       host: '127.0.0.1',
       strictPort: false,
-      open: true
+      open: true,
+      proxy: {
+        '/api': {
+          target: 'http://127.0.0.1:8000',
+          changeOrigin: true,
+        },
+        '/uploads': {
+          target: 'http://127.0.0.1:8000',
+          changeOrigin: true,
+        },
+      },
     },
     plugins: [react()],
     define: {

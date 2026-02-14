@@ -1,9 +1,10 @@
 # main.py
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, case
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 from typing import List, Optional
@@ -16,14 +17,78 @@ import re
 import logging
 import mimetypes
 import httpx
+import io
+import json
 from dotenv import load_dotenv
 import jdatetime
 from datetime import datetime, timedelta
 import uuid
 
+from openpyxl import Workbook
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Commitments (Public Digital Contracts) - STRICT RULES
+# ============================================================================
+
+COMMITMENT_TERMS_VERSION = "v1"
+
+ALLOWED_COMMITMENT_STATUSES = {"draft", "active", "in_progress", "completed", "failed"}
+ALLOWED_COMMITMENT_STATUS_AFTER_PUBLISH = {"active", "in_progress", "completed", "failed"}
+ALLOWED_COMMITMENT_CATEGORIES = {"economy", "housing", "transparency", "employment", "other"}
+
+
+def _log_commitment_security_event(
+    *,
+    db: Session,
+    representative_id: int,
+    error_type: str,
+    message: str,
+) -> None:
+    try:
+        db.add(
+            models.TechnicalErrorLog(
+                service_name="api",
+                error_type=str(error_type),
+                error_message=str(message)[:8000],
+                telegram_user_id=None,
+                candidate_id=int(representative_id),
+                state="commitments",
+            )
+        )
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _require_candidate(current_user: models.User) -> None:
+    if current_user.role != "CANDIDATE":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+
+def _normalize_commitment_status(value: str | None) -> str:
+    return (value or "").strip().lower().replace(" ", "_")
+
+
+def _validate_commitment_category(value: str | None) -> str:
+    v = (value or "").strip().lower()
+    if v not in ALLOWED_COMMITMENT_CATEGORIES:
+        raise HTTPException(status_code=422, detail={"message": "Invalid category"})
+    return v
+
+
+def _validate_commitment_status_after_publish(value: str | None) -> str:
+    v = _normalize_commitment_status(value)
+    if v not in ALLOWED_COMMITMENT_STATUS_AFTER_PUBLISH:
+        raise HTTPException(status_code=422, detail={"message": "Invalid status"})
+    return v
 
 
 def _extract_telegram_chat_target(value: str | None) -> str | int | None:
@@ -205,6 +270,66 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+
+@app.middleware("http")
+async def monitoring_error_logging_middleware(request, call_next):
+    """Minimal technical error logging (MVP).
+
+    Goal: make 5xx and unhandled exceptions visible to super-admin monitoring.
+    """
+    try:
+        response = await call_next(request)
+        if getattr(response, "status_code", 200) >= 500:
+            try:
+                db = database.SessionLocal()
+                db.add(
+                    models.TechnicalErrorLog(
+                        service_name="api",
+                        error_type="HTTP_5XX",
+                        error_message=f"{request.method} {request.url.path} -> {response.status_code}",
+                        telegram_user_id=None,
+                        candidate_id=None,
+                        state=None,
+                    )
+                )
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            finally:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+        return response
+    except Exception as e:
+        try:
+            db = database.SessionLocal()
+            db.add(
+                models.TechnicalErrorLog(
+                    service_name="api",
+                    error_type=e.__class__.__name__,
+                    error_message=str(e)[:8000],
+                    telegram_user_id=None,
+                    candidate_id=None,
+                    state=None,
+                )
+            )
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+        raise
 
 # Mount static files for uploads
 UPLOAD_DIR = "uploads"
@@ -1231,6 +1356,583 @@ def admin_candidate_stats(
     return out
 
 
+# ============================================================================
+# ADMIN: MVP LEARNING PANEL
+# ============================================================================
+
+
+def _overview_counters(db: Session, *, candidate_id: int | None) -> schemas.MvpOverviewCounters:
+    uq_users = db.query(func.count(func.distinct(models.BotUserRegistry.telegram_user_id)))
+    active_users_q = db.query(func.count(func.distinct(models.BotUserRegistry.telegram_user_id)))
+    active_cutoff = datetime.utcnow() - timedelta(days=7)
+    if candidate_id is not None:
+        uq_users = uq_users.filter(models.BotUserRegistry.candidate_id == int(candidate_id))
+        active_users_q = active_users_q.filter(
+            models.BotUserRegistry.candidate_id == int(candidate_id),
+            models.BotUserRegistry.last_seen_at >= active_cutoff,
+        )
+    else:
+        active_users_q = active_users_q.filter(models.BotUserRegistry.last_seen_at >= active_cutoff)
+
+    total_users = int(uq_users.scalar() or 0)
+    active_users = int(active_users_q.scalar() or 0)
+
+    q = db.query(func.count(models.BotSubmission.id)).filter(models.BotSubmission.type == "QUESTION")
+    q_ans = db.query(func.count(models.BotSubmission.id)).filter(
+        models.BotSubmission.type == "QUESTION",
+        func.upper(func.coalesce(models.BotSubmission.status, "")) == "ANSWERED",
+    )
+    fb = db.query(func.count(models.BotSubmission.id)).filter(models.BotSubmission.type == "FEEDBACK")
+    leads = db.query(func.count(models.BotSubmission.id)).filter(models.BotSubmission.type == "BOT_REQUEST")
+    if candidate_id is not None:
+        q = q.filter(models.BotSubmission.candidate_id == int(candidate_id))
+        q_ans = q_ans.filter(models.BotSubmission.candidate_id == int(candidate_id))
+        fb = fb.filter(models.BotSubmission.candidate_id == int(candidate_id))
+        leads = leads.filter(models.BotSubmission.candidate_id == int(candidate_id))
+
+    total_questions = int(q.scalar() or 0)
+    answered_questions = int(q_ans.scalar() or 0)
+    total_comments = int(fb.scalar() or 0)
+    total_leads = int(leads.scalar() or 0)
+
+    commitments = db.query(func.count(models.BotCommitment.id))
+    if candidate_id is not None:
+        commitments = commitments.filter(models.BotCommitment.candidate_id == int(candidate_id))
+    total_commitments = int(commitments.scalar() or 0)
+
+    return schemas.MvpOverviewCounters(
+        total_users=total_users,
+        active_users=active_users,
+        total_questions=total_questions,
+        answered_questions=answered_questions,
+        total_comments=total_comments,
+        total_commitments=total_commitments,
+        total_leads=total_leads,
+    )
+
+
+def _parse_iso_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        s = str(value).strip()
+        if not s:
+            return None
+        if "T" not in s:
+            return datetime.fromisoformat(s + "T00:00:00")
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _log_export_action(db: Session, *, admin_id: int, export_type: str, filters: dict | None = None) -> None:
+    try:
+        db.add(models.AdminExportLog(admin_id=int(admin_id), export_type=str(export_type), filters=filters or None))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+@app.get("/api/admin/mvp/overview", response_model=schemas.MvpOverviewResponse)
+def admin_mvp_overview(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_admin_user),
+):
+    global_counters = _overview_counters(db, candidate_id=None)
+    candidates = (
+        db.query(models.User)
+        .filter(models.User.role == "CANDIDATE")
+        .order_by(models.User.id.asc())
+        .all()
+    )
+    per_candidate: list[schemas.MvpRepresentativeOverview] = []
+    for c in candidates:
+        per_candidate.append(
+            schemas.MvpRepresentativeOverview(
+                candidate_id=int(c.id),
+                name=getattr(c, "full_name", None) or getattr(c, "username", None),
+                counters=_overview_counters(db, candidate_id=int(c.id)),
+            )
+        )
+    return schemas.MvpOverviewResponse(global_counters=global_counters, per_candidate=per_candidate)
+
+
+@app.get("/api/admin/mvp/behavior", response_model=schemas.BehaviorStatsResponse)
+def admin_mvp_behavior_stats(
+    candidate_id: Optional[int] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_admin_user),
+):
+    q = db.query(models.BotBehaviorCounter)
+    if candidate_id is None:
+        q = q.filter(models.BotBehaviorCounter.candidate_id.is_(None))
+    else:
+        q = q.filter(models.BotBehaviorCounter.candidate_id == int(candidate_id))
+    rows = q.order_by(models.BotBehaviorCounter.event.asc()).all()
+    items = [schemas.BehaviorCounterItem(event=r.event, count=int(r.count or 0)) for r in rows]
+    return schemas.BehaviorStatsResponse(candidate_id=candidate_id, items=items)
+
+
+@app.get("/api/admin/mvp/paths", response_model=schemas.FlowPathsResponse)
+def admin_mvp_flow_paths(
+    candidate_id: Optional[int] = None,
+    limit: int = 20,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_admin_user),
+):
+    limit = max(1, min(int(limit), 200))
+    q = db.query(models.BotFlowPathCounter)
+    if candidate_id is None:
+        q = q.filter(models.BotFlowPathCounter.candidate_id.is_(None))
+    else:
+        q = q.filter(models.BotFlowPathCounter.candidate_id == int(candidate_id))
+    rows = q.order_by(models.BotFlowPathCounter.count.desc()).limit(limit).all()
+    items = [schemas.FlowPathItem(path=r.path, count=int(r.count or 0)) for r in rows]
+    return schemas.FlowPathsResponse(candidate_id=candidate_id, items=items)
+
+
+@app.get("/api/admin/mvp/questions", response_model=List[schemas.QuestionLearningItem])
+def admin_mvp_questions(
+    candidate_id: Optional[int] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_admin_user),
+):
+    q = db.query(models.BotSubmission).filter(models.BotSubmission.type == "QUESTION")
+    if candidate_id is not None:
+        q = q.filter(models.BotSubmission.candidate_id == int(candidate_id))
+    if status:
+        q = q.filter(func.upper(func.coalesce(models.BotSubmission.status, "")) == str(status).strip().upper())
+    return q.order_by(models.BotSubmission.id.desc()).all()
+
+
+@app.get("/api/admin/mvp/commitments", response_model=List[schemas.CommitmentLearningItem])
+def admin_mvp_commitments(
+    candidate_id: Optional[int] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_admin_user),
+):
+    q = db.query(models.BotCommitment)
+    if candidate_id is not None:
+        q = q.filter(models.BotCommitment.candidate_id == int(candidate_id))
+    return q.order_by(models.BotCommitment.id.desc()).all()
+
+
+@app.get("/api/admin/mvp/leads", response_model=List[schemas.LeadItem])
+def admin_mvp_leads(
+    candidate_id: Optional[int] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_admin_user),
+):
+    q = db.query(models.BotSubmission).filter(models.BotSubmission.type == "BOT_REQUEST")
+    if candidate_id is not None:
+        q = q.filter(models.BotSubmission.candidate_id == int(candidate_id))
+    return q.order_by(models.BotSubmission.id.desc()).all()
+
+
+@app.get("/api/admin/mvp/ux-logs", response_model=List[schemas.UxLogItem])
+def admin_mvp_ux_logs(
+    candidate_id: Optional[int] = None,
+    action: Optional[str] = None,
+    limit: int = 200,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_admin_user),
+):
+    limit = max(1, min(int(limit), 2000))
+    q = db.query(models.BotUxLog)
+    if candidate_id is not None:
+        q = q.filter(models.BotUxLog.candidate_id == int(candidate_id))
+    if action:
+        q = q.filter(models.BotUxLog.action == str(action).strip())
+    return q.order_by(models.BotUxLog.id.desc()).limit(limit).all()
+
+
+@app.get("/api/admin/mvp/global-users", response_model=List[schemas.GlobalBotUserItem])
+def admin_mvp_global_users(
+    representative_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    interaction_type: Optional[str] = None,
+    limit: int = 1000,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_super_admin_user),
+):
+    limit = max(1, min(int(limit), 5000))
+    q = db.query(models.BotUserRegistry)
+
+    if representative_id is not None:
+        q = q.filter(models.BotUserRegistry.candidate_id == int(representative_id))
+
+    sd = _parse_iso_dt(start_date)
+    ed = _parse_iso_dt(end_date)
+    if sd is not None:
+        q = q.filter(models.BotUserRegistry.first_seen_at >= sd)
+    if ed is not None:
+        q = q.filter(models.BotUserRegistry.last_seen_at <= ed)
+
+    it = (interaction_type or "").strip().lower()
+    if it == "question":
+        q = q.filter(models.BotUserRegistry.asked_question == True)  # noqa: E712
+    elif it == "comment":
+        q = q.filter(models.BotUserRegistry.left_comment == True)  # noqa: E712
+    elif it == "lead":
+        q = q.filter(models.BotUserRegistry.became_lead == True)  # noqa: E712
+
+    return q.order_by(models.BotUserRegistry.last_seen_at.desc()).limit(limit).all()
+
+
+@app.get("/api/admin/mvp/global-users/export.xlsx")
+def admin_mvp_global_users_export_xlsx(
+    representative_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    interaction_type: Optional[str] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_super_admin_user),
+):
+    rows = admin_mvp_global_users(
+        representative_id=representative_id,
+        start_date=start_date,
+        end_date=end_date,
+        interaction_type=interaction_type,
+        limit=5000,
+        db=db,
+        current_user=current_user,
+    )
+
+    # Log export action (non-fatal)
+    _log_export_action(
+        db,
+        admin_id=int(current_user.id),
+        export_type="global_users",
+        filters={
+            "representative_id": representative_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "interaction_type": interaction_type,
+        },
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "users"
+
+    headers = [
+        "id",
+        "user_id",
+        "username",
+        "first_name",
+        "last_name",
+        "phone",
+        "platform",
+        "representative_id",
+        "bot_id",
+        "candidate_name",
+        "candidate_city",
+        "candidate_province",
+        "candidate_constituency",
+        "chat_type",
+        "first_interaction_at",
+        "last_interaction_at",
+        "total_interactions",
+        "asked_question",
+        "left_comment",
+        "viewed_commitment",
+        "became_lead",
+        "selected_role",
+    ]
+    ws.append(headers)
+
+    for r in rows:
+        ws.append(
+            [
+                int(getattr(r, "id", 0) or 0),
+                str(getattr(r, "telegram_user_id", "") or ""),
+                str(getattr(r, "telegram_username", "") or ""),
+                str(getattr(r, "first_name", "") or ""),
+                str(getattr(r, "last_name", "") or ""),
+                str(getattr(r, "phone", "") or ""),
+                str(getattr(r, "platform", "TELEGRAM") or "TELEGRAM"),
+                int(getattr(r, "candidate_id", 0) or 0),
+                str(getattr(r, "candidate_bot_name", "") or ""),
+                str(getattr(r, "candidate_name", "") or ""),
+                str(getattr(r, "candidate_city", "") or ""),
+                str(getattr(r, "candidate_province", "") or ""),
+                str(getattr(r, "candidate_constituency", "") or ""),
+                str(getattr(r, "chat_type", "") or ""),
+                getattr(r, "first_seen_at", None),
+                getattr(r, "last_seen_at", None),
+                int(getattr(r, "total_interactions", 0) or 0),
+                bool(getattr(r, "asked_question", False)),
+                bool(getattr(r, "left_comment", False)),
+                bool(getattr(r, "viewed_commitment", False)),
+                bool(getattr(r, "became_lead", False)),
+                str(getattr(r, "selected_role", "") or ""),
+            ]
+        )
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"global_users_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+# =====================
+# Monitoring (Super Admin only)
+# =====================
+
+
+@app.get("/api/admin/monitoring/errors", response_model=List[schemas.TechnicalErrorItem])
+def admin_monitoring_errors(
+    representative_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 500,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_super_admin_user),
+):
+    limit = max(1, min(int(limit), 5000))
+    q = db.query(models.TechnicalErrorLog)
+    if representative_id is not None:
+        q = q.filter(models.TechnicalErrorLog.candidate_id == int(representative_id))
+    sd = _parse_iso_dt(start_date)
+    ed = _parse_iso_dt(end_date)
+    if sd is not None:
+        q = q.filter(models.TechnicalErrorLog.created_at >= sd)
+    if ed is not None:
+        q = q.filter(models.TechnicalErrorLog.created_at <= ed)
+    return q.order_by(models.TechnicalErrorLog.id.desc()).limit(limit).all()
+
+
+@app.get("/api/admin/monitoring/errors/export.xlsx")
+def admin_monitoring_errors_export_xlsx(
+    representative_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_super_admin_user),
+):
+    rows = admin_monitoring_errors(
+        representative_id=representative_id,
+        start_date=start_date,
+        end_date=end_date,
+        limit=5000,
+        db=db,
+        current_user=current_user,
+    )
+    _log_export_action(
+        db,
+        admin_id=int(current_user.id),
+        export_type="technical_errors",
+        filters={"representative_id": representative_id, "start_date": start_date, "end_date": end_date},
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "errors"
+    ws.append(
+        [
+            "error_id",
+            "timestamp",
+            "service_name",
+            "error_type",
+            "error_message",
+            "user_id",
+            "representative_id",
+            "state",
+        ]
+    )
+    for r in rows:
+        ws.append(
+            [
+                int(getattr(r, "id", 0) or 0),
+                getattr(r, "created_at", None),
+                str(getattr(r, "service_name", "") or ""),
+                str(getattr(r, "error_type", "") or ""),
+                str(getattr(r, "error_message", "") or ""),
+                str(getattr(r, "telegram_user_id", "") or ""),
+                getattr(r, "candidate_id", None),
+                str(getattr(r, "state", "") or ""),
+            ]
+        )
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"monitoring_errors_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get("/api/admin/monitoring/ux-logs", response_model=List[schemas.MonitoringUxLogItem])
+def admin_monitoring_ux_logs(
+    representative_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    action: Optional[str] = None,
+    limit: int = 1000,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_super_admin_user),
+):
+    limit = max(1, min(int(limit), 5000))
+    q = db.query(models.BotUxLog)
+    if representative_id is not None:
+        q = q.filter(models.BotUxLog.candidate_id == int(representative_id))
+    sd = _parse_iso_dt(start_date)
+    ed = _parse_iso_dt(end_date)
+    if sd is not None:
+        q = q.filter(models.BotUxLog.created_at >= sd)
+    if ed is not None:
+        q = q.filter(models.BotUxLog.created_at <= ed)
+    if action:
+        q = q.filter(models.BotUxLog.action == str(action).strip())
+    return q.order_by(models.BotUxLog.id.desc()).limit(limit).all()
+
+
+@app.get("/api/admin/monitoring/ux-logs/export.xlsx")
+def admin_monitoring_ux_logs_export_xlsx(
+    representative_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    action: Optional[str] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_super_admin_user),
+):
+    rows = admin_monitoring_ux_logs(
+        representative_id=representative_id,
+        start_date=start_date,
+        end_date=end_date,
+        action=action,
+        limit=5000,
+        db=db,
+        current_user=current_user,
+    )
+    _log_export_action(
+        db,
+        admin_id=int(current_user.id),
+        export_type="ux_logs",
+        filters={
+            "representative_id": representative_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "action": action,
+        },
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "ux_logs"
+    ws.append(
+        [
+            "log_id",
+            "timestamp",
+            "user_id",
+            "representative_id",
+            "current_state",
+            "action",
+            "expected_action",
+        ]
+    )
+    for r in rows:
+        ws.append(
+            [
+                int(getattr(r, "id", 0) or 0),
+                getattr(r, "created_at", None),
+                str(getattr(r, "telegram_user_id", "") or ""),
+                int(getattr(r, "candidate_id", 0) or 0),
+                str(getattr(r, "state", "") or ""),
+                str(getattr(r, "action", "") or ""),
+                str(getattr(r, "expected_action", "") or ""),
+            ]
+        )
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"monitoring_ux_logs_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get("/api/admin/monitoring/flow-drops", response_model=List[schemas.FlowDropItem])
+def admin_monitoring_flow_drops(
+    representative_id: Optional[int] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_super_admin_user),
+):
+    q = db.query(models.BotFlowDropCounter)
+    if representative_id is not None:
+        q = q.filter(models.BotFlowDropCounter.candidate_id == int(representative_id))
+    return q.order_by(models.BotFlowDropCounter.updated_at.desc()).all()
+
+
+@app.get("/api/admin/monitoring/flow-drops/export.xlsx")
+def admin_monitoring_flow_drops_export_xlsx(
+    representative_id: Optional[int] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_super_admin_user),
+):
+    rows = admin_monitoring_flow_drops(representative_id=representative_id, db=db, current_user=current_user)
+    _log_export_action(
+        db,
+        admin_id=int(current_user.id),
+        export_type="flow_drop_stats",
+        filters={"representative_id": representative_id},
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "flow_drops"
+    ws.append(["id", "representative_id", "flow_type", "started_count", "completed_count", "abandoned_count", "updated_at"])
+    for r in rows:
+        ws.append(
+            [
+                int(getattr(r, "id", 0) or 0),
+                getattr(r, "candidate_id", None),
+                str(getattr(r, "flow_type", "") or ""),
+                int(getattr(r, "started_count", 0) or 0),
+                int(getattr(r, "completed_count", 0) or 0),
+                int(getattr(r, "abandoned_count", 0) or 0),
+                getattr(r, "updated_at", None),
+            ]
+        )
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"monitoring_flow_drops_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get("/api/admin/monitoring/health-checks", response_model=List[schemas.HealthCheckItem])
+def admin_monitoring_health_checks(
+    representative_id: Optional[int] = None,
+    check_type: Optional[str] = None,
+    limit: int = 500,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_super_admin_user),
+):
+    limit = max(1, min(int(limit), 5000))
+    q = db.query(models.BotHealthCheck)
+    if representative_id is not None:
+        q = q.filter(models.BotHealthCheck.candidate_id == int(representative_id))
+    if check_type:
+        q = q.filter(models.BotHealthCheck.check_type == str(check_type).strip())
+    return q.order_by(models.BotHealthCheck.id.desc()).limit(limit).all()
+
+
 @app.put("/api/candidates/me/feedback/{submission_id}", response_model=schemas.FeedbackSubmission)
 def update_my_feedback_submission(
     submission_id: int,
@@ -1451,6 +2153,334 @@ def reject_my_question_submission(
     db.commit()
     db.refresh(submission)
     return submission
+
+
+# ============================================================================
+# COMMITMENTS (PUBLIC DIGITAL CONTRACTS) ENDPOINTS (STRICT)
+# ============================================================================
+
+
+@app.get("/api/candidates/me/commitments/terms/acceptance", response_model=Optional[schemas.CommitmentTermsAcceptanceOut])
+def get_commitment_terms_acceptance(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+    row = (
+        db.query(models.CommitmentTermsAcceptance)
+        .filter(models.CommitmentTermsAcceptance.representative_id == int(current_user.id))
+        .first()
+    )
+    return row
+
+
+@app.post("/api/candidates/me/commitments/terms/accept", response_model=schemas.CommitmentTermsAcceptanceOut)
+def accept_commitment_terms(
+    request: Request,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+
+    existing = (
+        db.query(models.CommitmentTermsAcceptance)
+        .filter(models.CommitmentTermsAcceptance.representative_id == int(current_user.id))
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    ip_address = None
+    try:
+        ip_address = getattr(getattr(request, "client", None), "host", None)
+    except Exception:
+        ip_address = None
+    user_agent = (request.headers.get("user-agent") or "").strip() or None
+
+    row = models.CommitmentTermsAcceptance(
+        representative_id=int(current_user.id),
+        accepted_at=datetime.utcnow(),
+        ip_address=ip_address,
+        user_agent=user_agent,
+        version=COMMITMENT_TERMS_VERSION,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.get("/api/candidates/me/commitments", response_model=List[schemas.CommitmentOut])
+def list_my_commitments(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+    rows = (
+        db.query(models.BotCommitment)
+        .options(joinedload(models.BotCommitment.progress_logs))
+        .filter(models.BotCommitment.candidate_id == int(current_user.id))
+        .order_by(models.BotCommitment.id.desc())
+        .all()
+    )
+    # Legacy SQLite DBs may contain NULL status_updated_at (column added later).
+    # Our response schema requires a datetime, so fill it defensively.
+    touched = False
+    now = datetime.utcnow()
+    for r in rows:
+        if getattr(r, "status_updated_at", None) is None:
+            r.status_updated_at = getattr(r, "published_at", None) or getattr(r, "created_at", None) or now
+            touched = True
+    if touched:
+        db.commit()
+    return rows
+
+
+@app.post("/api/candidates/me/commitments", response_model=schemas.CommitmentOut)
+def create_commitment_draft(
+    payload: schemas.CommitmentCreate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+
+    accepted = (
+        db.query(models.CommitmentTermsAcceptance)
+        .filter(models.CommitmentTermsAcceptance.representative_id == int(current_user.id))
+        .first()
+    )
+    if accepted is None:
+        raise HTTPException(status_code=403, detail={"message": "Commitment terms not accepted"})
+
+    title = (payload.title or "").strip()
+    description = (payload.description or "").strip()
+    category = _validate_commitment_category(payload.category)
+
+    if not title:
+        raise HTTPException(status_code=422, detail={"message": "title is required"})
+    if len(title) > 120:
+        raise HTTPException(status_code=422, detail={"message": "title is too long"})
+    if not description:
+        raise HTTPException(status_code=422, detail={"message": "description is required"})
+    if len(description) > 5000:
+        raise HTTPException(status_code=422, detail={"message": "description is too long"})
+
+    row = models.BotCommitment(
+        candidate_id=int(current_user.id),
+        title=title,
+        body=description,
+        category=category,
+        status="draft",
+        status_updated_at=datetime.utcnow(),
+        locked=False,
+        published_at=None,
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.put("/api/candidates/me/commitments/{commitment_id}", response_model=schemas.CommitmentOut)
+def update_commitment_draft(
+    commitment_id: int,
+    payload: schemas.CommitmentUpdateDraft,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+
+    row = (
+        db.query(models.BotCommitment)
+        .options(joinedload(models.BotCommitment.progress_logs))
+        .filter(models.BotCommitment.id == int(commitment_id), models.BotCommitment.candidate_id == int(current_user.id))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Commitment not found")
+
+    is_published = bool(getattr(row, "published_at", None)) or bool(getattr(row, "locked", False))
+    if is_published or _normalize_commitment_status(getattr(row, "status", None)) != "draft":
+        _log_commitment_security_event(
+            db=db,
+            representative_id=int(current_user.id),
+            error_type="CommitmentImmutableViolation",
+            message=f"Attempted to edit commitment fields after publish. commitment_id={commitment_id}",
+        )
+        raise HTTPException(status_code=403, detail={"message": "Commitment is immutable after publish"})
+
+    data = payload.model_dump(exclude_unset=True)
+    if "title" in data:
+        v = (data.get("title") or "").strip()
+        if not v:
+            raise HTTPException(status_code=422, detail={"message": "title is required"})
+        if len(v) > 120:
+            raise HTTPException(status_code=422, detail={"message": "title is too long"})
+        row.title = v
+
+    if "description" in data:
+        v = (data.get("description") or "").strip()
+        if not v:
+            raise HTTPException(status_code=422, detail={"message": "description is required"})
+        if len(v) > 5000:
+            raise HTTPException(status_code=422, detail={"message": "description is too long"})
+        row.body = v
+
+    if "category" in data:
+        row.category = _validate_commitment_category(data.get("category"))
+
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.post("/api/candidates/me/commitments/{commitment_id}/publish", response_model=schemas.CommitmentOut)
+def publish_commitment(
+    commitment_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+
+    row = (
+        db.query(models.BotCommitment)
+        .options(joinedload(models.BotCommitment.progress_logs))
+        .filter(models.BotCommitment.id == int(commitment_id), models.BotCommitment.candidate_id == int(current_user.id))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Commitment not found")
+
+    if getattr(row, "published_at", None) is not None or bool(getattr(row, "locked", False)):
+        raise HTTPException(status_code=409, detail={"message": "Commitment already published"})
+
+    if _normalize_commitment_status(getattr(row, "status", None)) != "draft":
+        raise HTTPException(status_code=409, detail={"message": "Only draft commitments can be published"})
+
+    # Enforce required fields before publish
+    if not (getattr(row, "title", None) or "").strip() or not (getattr(row, "body", None) or "").strip():
+        raise HTTPException(status_code=422, detail={"message": "title and description are required"})
+    if not (getattr(row, "category", None) or "").strip():
+        raise HTTPException(status_code=422, detail={"message": "category is required"})
+
+    now = datetime.utcnow()
+    row.published_at = now
+    row.locked = True
+    row.status = "active"
+    row.status_updated_at = now
+
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.post("/api/candidates/me/commitments/{commitment_id}/status", response_model=schemas.CommitmentOut)
+def update_commitment_status(
+    commitment_id: int,
+    payload: schemas.CommitmentUpdateStatus,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+
+    row = (
+        db.query(models.BotCommitment)
+        .options(joinedload(models.BotCommitment.progress_logs))
+        .filter(models.BotCommitment.id == int(commitment_id), models.BotCommitment.candidate_id == int(current_user.id))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Commitment not found")
+
+    if getattr(row, "published_at", None) is None or not bool(getattr(row, "locked", False)):
+        raise HTTPException(status_code=403, detail={"message": "Only published commitments can change status"})
+
+    next_status = _validate_commitment_status_after_publish(payload.status)
+    now = datetime.utcnow()
+    row.status = next_status
+    row.status_updated_at = now
+
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.post("/api/candidates/me/commitments/{commitment_id}/progress", response_model=schemas.CommitmentOut)
+def add_commitment_progress_log(
+    commitment_id: int,
+    payload: schemas.CommitmentAddProgress,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+
+    row = (
+        db.query(models.BotCommitment)
+        .options(joinedload(models.BotCommitment.progress_logs))
+        .filter(models.BotCommitment.id == int(commitment_id), models.BotCommitment.candidate_id == int(current_user.id))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Commitment not found")
+
+    if getattr(row, "published_at", None) is None or not bool(getattr(row, "locked", False)):
+        raise HTTPException(status_code=403, detail={"message": "Progress logs are only allowed after publish"})
+
+    note = (payload.note or "").strip()
+    if not note:
+        raise HTTPException(status_code=422, detail={"message": "note is required"})
+    if len(note) > 1000:
+        raise HTTPException(status_code=422, detail={"message": "note is too long"})
+
+    log_row = models.CommitmentProgressLog(commitment_id=int(row.id), note=note, created_at=datetime.utcnow())
+    db.add(log_row)
+    db.commit()
+
+    # refresh parent with logs
+    row = (
+        db.query(models.BotCommitment)
+        .options(joinedload(models.BotCommitment.progress_logs))
+        .filter(models.BotCommitment.id == int(commitment_id), models.BotCommitment.candidate_id == int(current_user.id))
+        .first()
+    )
+    return row
+
+
+@app.delete("/api/candidates/me/commitments/{commitment_id}")
+def delete_commitment_draft(
+    commitment_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+
+    row = (
+        db.query(models.BotCommitment)
+        .filter(models.BotCommitment.id == int(commitment_id), models.BotCommitment.candidate_id == int(current_user.id))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Commitment not found")
+
+    if getattr(row, "published_at", None) is not None or bool(getattr(row, "locked", False)):
+        _log_commitment_security_event(
+            db=db,
+            representative_id=int(current_user.id),
+            error_type="CommitmentDeleteForbidden",
+            message=f"Attempted to delete commitment after publish. commitment_id={commitment_id}",
+        )
+        raise HTTPException(status_code=403, detail={"message": "Published commitments cannot be deleted"})
+
+    if _normalize_commitment_status(getattr(row, "status", None)) != "draft":
+        raise HTTPException(status_code=403, detail={"message": "Only draft commitments can be deleted"})
+
+    db.delete(row)
+    db.commit()
+    return {"message": "deleted"}
 
 # ============================================================================
 # ANNOUNCEMENTS ENDPOINTS

@@ -3,6 +3,64 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
+class CommitmentCategory(str):
+    pass
+
+class CommitmentStatus(str):
+    pass
+
+class CommitmentTermsAcceptanceOut(BaseModel):
+    id: str
+    representative_id: int
+    accepted_at: datetime
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    version: str = "v1"
+
+    class Config:
+        from_attributes = True
+
+class CommitmentProgressLogOut(BaseModel):
+    id: int
+    note: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class CommitmentCreate(BaseModel):
+    title: str
+    description: str
+    category: str
+
+class CommitmentUpdateDraft(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+
+class CommitmentUpdateStatus(BaseModel):
+    status: str
+
+class CommitmentAddProgress(BaseModel):
+    note: str
+
+class CommitmentOut(BaseModel):
+    id: int
+    title: str
+    description: str = Field(..., alias="body")
+    category: Optional[str] = None
+    created_by: int = Field(..., alias="candidate_id")
+    created_at: datetime
+    published_at: Optional[datetime] = None
+    status: str
+    status_updated_at: datetime
+    is_locked: bool = Field(..., alias="locked")
+    progress_logs: List[CommitmentProgressLogOut] = []
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
 # --- User Schemas ---
 class User(BaseModel):
     id: int
@@ -237,6 +295,193 @@ class FeedbackStatsResponse(BaseModel):
     days: int
     total: int
     items: List[FeedbackTagStat]
+
+
+# --- Admin MVP Learning Panel ---
+
+
+class MvpOverviewCounters(BaseModel):
+    total_users: int
+    active_users: int
+    total_questions: int
+    answered_questions: int
+    total_comments: int
+    total_commitments: int
+    total_leads: int
+
+
+class MvpRepresentativeOverview(BaseModel):
+    candidate_id: int
+    name: Optional[str] = None
+    counters: MvpOverviewCounters
+
+
+class MvpOverviewResponse(BaseModel):
+    global_counters: MvpOverviewCounters
+    per_candidate: List[MvpRepresentativeOverview]
+
+
+class BehaviorCounterItem(BaseModel):
+    event: str
+    count: int
+
+
+class BehaviorStatsResponse(BaseModel):
+    candidate_id: Optional[int] = None
+    items: List[BehaviorCounterItem]
+
+
+class FlowPathItem(BaseModel):
+    path: str
+    count: int
+
+
+class FlowPathsResponse(BaseModel):
+    candidate_id: Optional[int] = None
+    items: List[FlowPathItem]
+
+
+class QuestionLearningItem(BaseModel):
+    question_id: int = Field(..., alias="id")
+    user_id: str = Field(..., alias="telegram_user_id")
+    representative_id: int = Field(..., alias="candidate_id")
+    category: Optional[str] = Field(None, alias="topic")
+    question_text: str = Field(..., alias="text")
+    status: str
+    created_at: datetime
+    answered_at: Optional[datetime] = None
+    answer_views_count: int = 0
+    channel_click_count: int = 0
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class CommitmentLearningItem(BaseModel):
+    commitment_id: int = Field(..., alias="id")
+    representative_id: int = Field(..., alias="candidate_id")
+    title: str
+    body: str
+    created_at: datetime
+    view_count: int = 0
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class LeadItem(BaseModel):
+    lead_id: int = Field(..., alias="id")
+    created_at: datetime
+    representative_id: int = Field(..., alias="candidate_id")
+    user_id: str = Field(..., alias="telegram_user_id")
+    username: Optional[str] = Field(None, alias="telegram_username")
+    selected_role: Optional[str] = Field(None, alias="topic")
+    phone: Optional[str] = Field(None, alias="requester_contact")
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class UxLogItem(BaseModel):
+    id: int
+    representative_id: int = Field(..., alias="candidate_id")
+    user_id: str = Field(..., alias="telegram_user_id")
+    state: Optional[str] = None
+    action: str
+    expected_action: Optional[str] = None
+    timestamp: datetime = Field(..., alias="created_at")
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class GlobalBotUserItem(BaseModel):
+    # Required export/list fields
+    user_id: str = Field(..., alias="telegram_user_id")
+    username: Optional[str] = Field(None, alias="telegram_username")
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    platform: str = "TELEGRAM"
+
+    representative_id: int = Field(..., alias="candidate_id")
+    bot_id: Optional[str] = Field(None, alias="candidate_bot_name")
+
+    first_interaction_at: datetime = Field(..., alias="first_seen_at")
+    last_interaction_at: datetime = Field(..., alias="last_seen_at")
+    total_interactions: int = 0
+
+    asked_question: bool = False
+    left_comment: bool = False
+    viewed_commitment: bool = False
+    became_lead: bool = False
+    selected_role: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+# --- Monitoring (Minimal & Learning-Focused) ---
+
+
+class TechnicalErrorItem(BaseModel):
+    error_id: int = Field(..., alias="id")
+    timestamp: datetime = Field(..., alias="created_at")
+    service_name: str
+    error_type: str
+    error_message: str
+    user_id: Optional[str] = Field(None, alias="telegram_user_id")
+    representative_id: Optional[int] = Field(None, alias="candidate_id")
+    state: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class MonitoringUxLogItem(BaseModel):
+    log_id: int = Field(..., alias="id")
+    timestamp: datetime = Field(..., alias="created_at")
+    user_id: str = Field(..., alias="telegram_user_id")
+    representative_id: int = Field(..., alias="candidate_id")
+    current_state: Optional[str] = Field(None, alias="state")
+    action: str
+    expected_action: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class HealthCheckItem(BaseModel):
+    id: int
+    timestamp: datetime = Field(..., alias="created_at")
+    representative_id: Optional[int] = Field(None, alias="candidate_id")
+    check_type: str
+    status: str
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class FlowDropItem(BaseModel):
+    id: int
+    representative_id: Optional[int] = Field(None, alias="candidate_id")
+    flow_type: str
+    started_count: int
+    completed_count: int
+    abandoned_count: int
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
 
 # --- Public Questions (Q&A) ---
 

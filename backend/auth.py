@@ -117,6 +117,25 @@ def get_admin_user(current_user: models.User = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
 
+
+def get_super_admin_user(current_user: models.User = Depends(get_admin_user)):
+    """Restrict access to Super Admin-only endpoints.
+
+    Config:
+      SUPER_ADMIN_USERNAMES="admin1,admin2"
+
+    If SUPER_ADMIN_USERNAMES is not set, all ADMIN users are treated as super admin
+    (dev-friendly default).
+    """
+    raw = os.getenv("SUPER_ADMIN_USERNAMES", "").strip()
+    if not raw:
+        return current_user
+
+    allowed = {u.strip().lower() for u in raw.split(",") if u.strip()}
+    if (current_user.username or "").strip().lower() not in allowed:
+        raise HTTPException(status_code=403, detail="Super admin access required")
+    return current_user
+
 # Dependency برای توکن
 async def get_token_from_header(authorization: str = None):
     """توکن را از Header دریافت کن"""
