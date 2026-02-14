@@ -21,7 +21,7 @@ import io
 import json
 from dotenv import load_dotenv
 import jdatetime
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from openpyxl import Workbook
@@ -29,6 +29,45 @@ from openpyxl import Workbook
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Runtime config (dev vs prod)
+# ---------------------------------------------------------------------------
+
+APP_ENV = (os.getenv("APP_ENV") or os.getenv("ENV") or "development").strip().lower()
+
+
+def _env_truthy(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _client_ip(request: Request) -> str:
+    # Behind reverse proxy, enable TRUST_PROXY=1 and ensure X-Forwarded-For is set.
+    if _env_truthy("TRUST_PROXY"):
+        xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        if xff:
+            return xff
+    try:
+        return request.client.host if request.client else "unknown"
+    except Exception:
+        return "unknown"
+
+
+# Very small in-memory rate limiter (per-process). Use Redis-based limiter for multi-worker production.
+_RATE_LIMIT: dict[str, list[float]] = {}
+
+
+def _rate_limit(request: Request, *, key: str, limit: int, window_seconds: int) -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    bucket_key = f"{key}:{_client_ip(request)}"
+    items = _RATE_LIMIT.get(bucket_key, [])
+    cutoff = now - window_seconds
+    items = [t for t in items if t >= cutoff]
+    if len(items) >= limit:
+        raise HTTPException(status_code=429, detail="تعداد درخواست‌ها زیاد است. لطفاً کمی بعد دوباره تلاش کنید.")
+    items.append(now)
+    _RATE_LIMIT[bucket_key] = items
 
 
 # ============================================================================
@@ -338,31 +377,47 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-        "http://localhost:3002",
-        "http://127.0.0.1:3002",
-        "http://localhost:5555",
-        "http://127.0.0.1:5555",
-    ],
+    allow_origins=(
+        [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()]
+        if APP_ENV in {"production", "prod"} and (os.getenv("CORS_ALLOW_ORIGINS") or "").strip()
+        else [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3001",
+            "http://localhost:3002",
+            "http://127.0.0.1:3002",
+            "http://localhost:5555",
+            "http://127.0.0.1:5555",
+        ]
+    ),
     # Dev convenience: Vite may auto-select another free 5xxx port.
-    allow_origin_regex=r"^http://(localhost|127\\.0\\.0\\.1):5\\d{3}$",
+    allow_origin_regex=None if APP_ENV in {"production", "prod"} else r"^http://(localhost|127\\.0\\.0\\.1):5\\d{3}$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+    return response
+
 @app.post("/api/upload")
 async def upload_file(
     file: UploadFile = File(...),
     candidate_name: str | None = Form(None),
+    current_user: models.User = Depends(auth.get_current_user),
+    request: Request = None,
 ):
     def _safe_part(value: str) -> str:
         v = (value or "").strip()
@@ -379,6 +434,27 @@ async def upload_file(
         original_ext = guessed if guessed.startswith(".") else ""
     ext = original_ext or ".bin"
 
+    denied_exts = {
+        ".html",
+        ".htm",
+        ".js",
+        ".mjs",
+        ".cjs",
+        ".svg",
+        ".xml",
+        ".php",
+        ".py",
+        ".sh",
+        ".bat",
+        ".ps1",
+        ".exe",
+        ".dll",
+        ".msi",
+        ".jar",
+    }
+    if ext in denied_exts:
+        raise HTTPException(status_code=422, detail={"message": "این نوع فایل مجاز نیست."})
+
     prefix = "معرفی-صوتی"
     who = _safe_part(candidate_name or "")
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -386,12 +462,47 @@ async def upload_file(
     base = f"{prefix}-{who}" if who else prefix
     filename = f"{base}-{ts}-{suffix}{ext}"
 
-    file_location = f"{UPLOAD_DIR}/{filename}"
-    with open(file_location, "wb+") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    MAX_BYTES = 10 * 1024 * 1024  # 10MB default (override via UPLOAD_MAX_BYTES)
+    try:
+        env_max = int((os.getenv("UPLOAD_MAX_BYTES") or "").strip() or "0")
+        if env_max > 0:
+            MAX_BYTES = env_max
+    except Exception:
+        pass
 
-    # Return URL (use 127.0.0.1 to avoid localhost IPv6 resolution issues on some systems)
-    return {"url": f"http://127.0.0.1:8000/uploads/{filename}", "filename": filename}
+    file_location = os.path.join(UPLOAD_DIR, filename)
+    written = 0
+    try:
+        with open(file_location, "wb+") as buffer:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > MAX_BYTES:
+                    raise HTTPException(status_code=413, detail={"message": "حجم فایل بیش از حد مجاز است."})
+                buffer.write(chunk)
+    except HTTPException:
+        try:
+            if os.path.exists(file_location):
+                os.remove(file_location)
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            await file.close()
+        except Exception:
+            pass
+
+    base = ""
+    try:
+        if request is not None and request.base_url:
+            base = str(request.base_url).rstrip("/")
+    except Exception:
+        base = ""
+    url = f"{base}/uploads/{filename}" if base else f"/uploads/{filename}"
+    return {"url": url, "filename": filename}
 
 
 @app.post("/api/upload/voice-intro")
@@ -766,47 +877,50 @@ class AssignPlanRequest(BaseModel):
 # AUTH ENDPOINTS
 # ============================================================================
 
-@app.post("/api/auth/register")
-def register(request: RegisterRequest, db: Session = Depends(database.get_db)):
-    """ثبت نام کاربر جدید"""
-    # بررسی اینکه نام کاربری منحصر به فرد است
-    existing_user = db.query(models.User).filter(models.User.username == request.username).first()
+@app.post("/api/auth/register", response_model=TokenResponse)
+def register(request: RegisterRequest, req: Request, db: Session = Depends(database.get_db)):
+    """ثبت نام کاربر جدید.
+
+    امنیت: این endpoint نباید نقش ADMIN بسازد. ثبت‌نام عمومی فقط کاربر CANDIDATE می‌سازد.
+    """
+    _rate_limit(req, key="auth:register", limit=10, window_seconds=60)
+
+    username = (request.username or "").strip()
+    email = (request.email or "").strip()
+    password = (request.password or "").strip()
+    full_name = (request.full_name or "").strip() or None
+
+    if not username or not password or not email:
+        raise HTTPException(status_code=422, detail="نام کاربری، ایمیل و رمز عبور الزامی است")
+    if len(password) < 8:
+        raise HTTPException(status_code=422, detail="رمز عبور باید حداقل ۸ کاراکتر باشد")
+
+    existing_user = db.query(models.User).filter(models.User.username == username).first()
     if existing_user:
-        raise HTTPException(
-            status_code=400,
-            detail="نام کاربری تکراری است"
-        )
-    
-    existing_email = db.query(models.User).filter(models.User.email == request.email).first()
+        raise HTTPException(status_code=400, detail="نام کاربری تکراری است")
+
+    existing_email = db.query(models.User).filter(models.User.email == email).first()
     if existing_email:
-        raise HTTPException(
-            status_code=400,
-            detail="ایمیل تکراری است"
-        )
-    
-    # ایجاد کاربر جدید
+        raise HTTPException(status_code=400, detail="ایمیل تکراری است")
+
     new_user = models.User(
-        username=request.username,
-        email=request.email,
-        full_name=request.full_name,
-        hashed_password=auth.get_password_hash(request.password),
-        role="ADMIN"
+        username=username,
+        email=email,
+        full_name=full_name,
+        hashed_password=auth.get_password_hash(password),
+        role="CANDIDATE",
+        is_active=True,
     )
-    
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    
-    return {
-        "id": new_user.id,
-        "username": new_user.username,
-        "email": new_user.email,
-        "full_name": new_user.full_name,
-        "role": new_user.role
-    }
+
+    return auth.create_tokens(new_user.username)
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-def login(request: LoginRequest, db: Session = Depends(database.get_db)):
+def login(request: LoginRequest, req: Request, db: Session = Depends(database.get_db)):
+    _rate_limit(req, key="auth:login", limit=20, window_seconds=60)
     user = auth.authenticate_user(db, request.username, request.password)
     if not user:
         raise HTTPException(
@@ -818,19 +932,20 @@ def login(request: LoginRequest, db: Session = Depends(database.get_db)):
 
 
 @app.post("/api/auth/refresh", response_model=TokenResponse)
-def refresh_access_token(request: RefreshRequest, db: Session = Depends(database.get_db)):
+def refresh_access_token(request: RefreshRequest, req: Request, db: Session = Depends(database.get_db)):
     """Issue a new access token using a valid refresh token."""
+    _rate_limit(req, key="auth:refresh", limit=30, window_seconds=60)
     username = auth.decode_refresh_token(request.refresh_token)
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials")
     return auth.create_tokens(username)
 
-@app.get("/api/auth/me")
+@app.get("/api/auth/me", response_model=schemas.User)
 def get_current_user(
     current_user: models.User = Depends(auth.get_current_user),
-    db: Session = Depends(database.get_db),
 ):
+    # Ensure we never serialize sensitive columns like hashed_password.
     return current_user
 
 # ============================================================================
@@ -838,14 +953,42 @@ def get_current_user(
 # ============================================================================
 
 @app.get("/api/candidates", response_model=List[schemas.Candidate])
-def get_candidates(db: Session = Depends(database.get_db)):
-    return db.query(models.User).filter(models.User.role == "CANDIDATE").order_by(models.User.id.desc()).all()
+def get_candidates(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    # Security: this endpoint previously leaked bot_token/bot_config publicly.
+    # Now it requires auth.
+    if current_user.role == "ADMIN":
+        return (
+            db.query(models.User)
+            .filter(models.User.role == "CANDIDATE")
+            .order_by(models.User.id.desc())
+            .all()
+        )
+
+    if current_user.role == "CANDIDATE":
+        return [current_user]
+
+    raise HTTPException(status_code=403, detail="Access denied")
 
 @app.get("/api/candidates/{candidate_id}", response_model=schemas.Candidate)
-def get_candidate(candidate_id: int, db: Session = Depends(database.get_db)):
-    candidate = db.query(models.User).filter(models.User.id == candidate_id, models.User.role == "CANDIDATE").first()
+def get_candidate(
+    candidate_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    candidate = (
+        db.query(models.User)
+        .filter(models.User.id == candidate_id, models.User.role == "CANDIDATE")
+        .first()
+    )
     if not candidate:
         raise HTTPException(status_code=404, detail="کاندید یافت نشد")
+
+    if current_user.role != "ADMIN" and candidate.id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     return candidate
 
 @app.post("/api/candidates", response_model=schemas.Candidate)
@@ -1039,6 +1182,9 @@ def reset_candidate_password(
 
     candidate.hashed_password = auth.get_password_hash(body.password)
     db.add(candidate)
+    db.commit()
+    return {"detail": "رمز عبور با موفقیت تغییر کرد"}
+
 @app.post("/api/candidates/{candidate_id}/assign-plan")
 def assign_plan_to_candidate(
     candidate_id: int,
@@ -1061,10 +1207,6 @@ def assign_plan_to_candidate(
     
     db.commit()
     return {"message": "پلن با موفقیت فعال شد"}
-
-    db.commit()
-
-    return {"detail": "رمز عبور با موفقیت تغییر کرد"}
 
 # ============================================================================
 # PLANS ENDPOINTS
@@ -1129,8 +1271,15 @@ def delete_plan(
 # ============================================================================
 
 @app.get("/api/tickets", response_model=List[schemas.Ticket])
-def get_tickets(db: Session = Depends(database.get_db)):
-    return db.query(models.Ticket).order_by(models.Ticket.id.desc()).all()
+def get_tickets(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    # Security: never expose all tickets publicly.
+    q = db.query(models.Ticket).order_by(models.Ticket.id.desc())
+    if current_user.role == "ADMIN":
+        return q.all()
+    return q.filter(models.Ticket.user_id == current_user.id).all()
 
 @app.post("/api/tickets", response_model=schemas.Ticket)
 def create_ticket(
@@ -1177,16 +1326,21 @@ def add_ticket_message(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
+    # Authorization: admin can access all; candidate only own tickets.
+    if current_user.role != "ADMIN" and ticket.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     new_msg = models.TicketMessage(
         ticket_id=ticket_id,
-        sender_role=message_data.sender_role,
+        # Security: do not trust client-provided sender_role.
+        sender_role=current_user.role,
         text=message_data.text,
         attachment_url=message_data.attachment_url,
         attachment_type=message_data.attachment_type
     )
     
     ticket.updated_at = datetime.utcnow()
-    if message_data.sender_role == "ADMIN":
+    if current_user.role == "ADMIN":
         ticket.status = "ANSWERED"
     else:
         ticket.status = "OPEN"

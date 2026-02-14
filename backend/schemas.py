@@ -238,7 +238,7 @@ class Ticket(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
-    messages: List[TicketMessage] = []
+    messages: List[TicketMessage] = Field(default_factory=list)
     user_name: Optional[str] = None
 
     class Config:

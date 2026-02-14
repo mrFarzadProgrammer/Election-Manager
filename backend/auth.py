@@ -12,11 +12,37 @@ from database import get_db
 load_dotenv()
 
 # Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-REFRESH_SECRET_KEY = os.getenv("REFRESH_SECRET_KEY", "your-refresh-secret-key-change-in-production")
+APP_ENV = (os.getenv("APP_ENV") or os.getenv("ENV") or "development").strip().lower()
+
+_DEFAULT_SECRET = "your-secret-key-change-in-production"
+_DEFAULT_REFRESH_SECRET = "your-refresh-secret-key-change-in-production"
+
+SECRET_KEY = os.getenv("SECRET_KEY", _DEFAULT_SECRET)
+REFRESH_SECRET_KEY = os.getenv("REFRESH_SECRET_KEY", _DEFAULT_REFRESH_SECRET)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
+
+
+def _looks_unsafe_secret(value: str, *, default_value: str) -> bool:
+    v = (value or "").strip()
+    if not v:
+        return True
+    if v == default_value:
+        return True
+    # Minimal length check; production should use a long random secret.
+    if len(v) < 32:
+        return True
+    return False
+
+
+if APP_ENV in {"production", "prod"}:
+    if _looks_unsafe_secret(SECRET_KEY, default_value=_DEFAULT_SECRET):
+        raise RuntimeError("SECRET_KEY is missing/weak. Set a strong SECRET_KEY in environment for production.")
+    if _looks_unsafe_secret(REFRESH_SECRET_KEY, default_value=_DEFAULT_REFRESH_SECRET):
+        raise RuntimeError(
+            "REFRESH_SECRET_KEY is missing/weak. Set a strong REFRESH_SECRET_KEY in environment for production."
+        )
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
