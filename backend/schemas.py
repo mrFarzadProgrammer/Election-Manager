@@ -55,7 +55,7 @@ class CommitmentOut(BaseModel):
     status: str
     status_updated_at: datetime
     is_locked: bool = Field(..., alias="locked")
-    progress_logs: List[CommitmentProgressLogOut] = []
+    progress_logs: List[CommitmentProgressLogOut] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

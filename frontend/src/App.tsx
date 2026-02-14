@@ -66,9 +66,39 @@ function App() {
     };
 
     if (!loading && user) {
-      fetchData(); // Initial fetch
-      const intervalId = setInterval(fetchData, 5000); // Poll every 5 seconds
-      return () => clearInterval(intervalId);
+      let intervalId: any = null;
+
+      const startPolling = () => {
+        if (intervalId) return;
+        // Initial fetch when polling starts/resumes
+        fetchData();
+        intervalId = setInterval(fetchData, 15000);
+      };
+
+      const stopPolling = () => {
+        if (!intervalId) return;
+        clearInterval(intervalId);
+        intervalId = null;
+      };
+
+      const onVisibilityChange = () => {
+        try {
+          if (typeof document !== 'undefined' && document.hidden) stopPolling();
+          else startPolling();
+        } catch {
+          // If document is not available, keep polling.
+          startPolling();
+        }
+      };
+
+      // Start polling only when tab is visible.
+      onVisibilityChange();
+      document.addEventListener('visibilitychange', onVisibilityChange);
+
+      return () => {
+        stopPolling();
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      };
     }
   }, [user, token, loading]);
 

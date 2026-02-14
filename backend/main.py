@@ -375,28 +375,37 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
+# CORS
+# - In production, default to fail-closed for cross-origin (allow_origins=[] when env is not set).
+# - Same-origin deployments do not rely on CORS, so this is safe.
+_cors_allow_origins: list[str]
+_cors_allow_origin_regex: str | None
+
+if APP_ENV in {"production", "prod"}:
+    _cors_allow_origins = [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()]
+    _cors_allow_origin_regex = None
+else:
+    _cors_allow_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "http://localhost:3002",
+        "http://127.0.0.1:3002",
+        "http://localhost:5555",
+        "http://127.0.0.1:5555",
+    ]
+    # Dev convenience: Vite may auto-select another free 5xxx port.
+    _cors_allow_origin_regex = r"^http://(localhost|127\\.0\\.0\\.1):5\\d{3}$"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=(
-        [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()]
-        if APP_ENV in {"production", "prod"} and (os.getenv("CORS_ALLOW_ORIGINS") or "").strip()
-        else [
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5174",
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "http://localhost:3001",
-            "http://127.0.0.1:3001",
-            "http://localhost:3002",
-            "http://127.0.0.1:3002",
-            "http://localhost:5555",
-            "http://127.0.0.1:5555",
-        ]
-    ),
-    # Dev convenience: Vite may auto-select another free 5xxx port.
-    allow_origin_regex=None if APP_ENV in {"production", "prod"} else r"^http://(localhost|127\\.0\\.0\\.1):5\\d{3}$",
+    allow_origins=_cors_allow_origins,
+    allow_origin_regex=_cors_allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -514,6 +523,7 @@ async def upload_voice_intro(
     file: UploadFile = File(...),
     candidate_name: str | None = Form(None),
     current_user: models.User = Depends(auth.get_current_user),
+    request: Request | None = None,
 ):
     """Upload candidate voice introduction (MVP).
 
@@ -586,7 +596,14 @@ async def upload_voice_intro(
         except Exception:
             pass
 
-    return {"url": f"http://127.0.0.1:8000/uploads/{filename}", "filename": filename}
+    base = ""
+    try:
+        if request is not None and request.base_url:
+            base = str(request.base_url).rstrip("/")
+    except Exception:
+        base = ""
+    url = f"{base}/uploads/{filename}" if base else f"/uploads/{filename}"
+    return {"url": url, "filename": filename}
 
 
 def _upload_file_path_from_localhost_url(url: str | None) -> str | None:
@@ -2350,7 +2367,7 @@ def accept_commitment_terms(
 
     ip_address = None
     try:
-        ip_address = getattr(getattr(request, "client", None), "host", None)
+        ip_address = _client_ip(request)
     except Exception:
         ip_address = None
     user_agent = (request.headers.get("user-agent") or "").strip() or None
