@@ -1,5 +1,5 @@
 # main.py
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, Request
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, Request, Response, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, FileResponse
@@ -29,6 +29,54 @@ from openpyxl import Workbook
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+def _cookie_secure_flag() -> bool:
+    # In production behind HTTPS (Cloudflare + reverse proxy), cookies should be Secure.
+    if APP_ENV in {"production", "prod"}:
+        return True
+    return _env_truthy("COOKIE_SECURE")
+
+
+def _set_auth_cookies(response: Response, *, access_token: str, refresh_token: str, csrf_token: str) -> None:
+    secure = _cookie_secure_flag()
+    # Access cookie
+    response.set_cookie(
+        key="access_token",
+        value=str(access_token),
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        path="/",
+        max_age=auth.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+    # Refresh cookie (narrower path reduces exposure)
+    response.set_cookie(
+        key="refresh_token",
+        value=str(refresh_token),
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        path="/api/auth/refresh",
+        max_age=auth.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+    )
+    # CSRF cookie (readable by JS; must be echoed in X-CSRF-Token header)
+    response.set_cookie(
+        key="csrf_token",
+        value=str(csrf_token),
+        httponly=False,
+        secure=secure,
+        samesite="lax",
+        path="/",
+        max_age=auth.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    secure = _cookie_secure_flag()
+    response.delete_cookie("access_token", path="/", secure=secure, samesite="lax")
+    response.delete_cookie("refresh_token", path="/api/auth/refresh", secure=secure, samesite="lax")
+    response.delete_cookie("csrf_token", path="/", secure=secure, samesite="lax")
 
 
 # ---------------------------------------------------------------------------
@@ -429,13 +477,54 @@ async def security_headers_middleware(request: Request, call_next):
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     return response
 
+
+@app.middleware("http")
+async def csrf_cookie_middleware(request: Request, call_next):
+    """CSRF protection for cookie-authenticated browser sessions.
+
+    If a request is authenticated via cookies (access_token cookie present) and does NOT
+    provide an Authorization header, then state-changing requests must include a
+    matching X-CSRF-Token header.
+    """
+    try:
+        method = (request.method or "").upper()
+        if method in {"GET", "HEAD", "OPTIONS"}:
+            return await call_next(request)
+
+        path = request.url.path if request.url else ""
+        if path.startswith("/api/auth/"):
+            return await call_next(request)
+
+        has_authz = bool((request.headers.get("authorization") or "").strip())
+        has_cookie_session = bool((request.cookies.get("access_token") or "").strip())
+        if has_authz or not has_cookie_session:
+            return await call_next(request)
+
+        csrf_cookie = (request.cookies.get("csrf_token") or "").strip()
+        csrf_header = (request.headers.get("x-csrf-token") or "").strip()
+        if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:
+            return Response(
+                content="{\"detail\":\"CSRF token missing/invalid\"}",
+                status_code=403,
+                media_type="application/json",
+            )
+    except Exception:
+        # Fail-open here would be risky; but also avoid breaking if middleware fails.
+        return Response(
+            content="{\"detail\":\"CSRF middleware error\"}",
+            status_code=500,
+            media_type="application/json",
+        )
+
+    return await call_next(request)
+
 @app.post("/api/upload")
 async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
     candidate_name: str | None = Form(None),
     visibility: str | None = Form(None),
     current_user: models.User = Depends(auth.get_current_user),
-    request: Request,
 ):
     def _safe_part(value: str) -> str:
         v = (value or "").strip()
@@ -966,7 +1055,7 @@ class AssignPlanRequest(BaseModel):
 # ============================================================================
 
 @app.post("/api/auth/register", response_model=TokenResponse)
-def register(request: RegisterRequest, req: Request, db: Session = Depends(database.get_db)):
+def register(request: RegisterRequest, req: Request, response: Response, db: Session = Depends(database.get_db)):
     """ثبت نام کاربر جدید.
 
     امنیت: این endpoint نباید نقش ADMIN بسازد. ثبت‌نام عمومی فقط کاربر CANDIDATE می‌سازد.
@@ -1004,10 +1093,21 @@ def register(request: RegisterRequest, req: Request, db: Session = Depends(datab
     db.commit()
     db.refresh(new_user)
 
-    return auth.create_tokens(new_user.username)
+    tokens = auth.create_tokens(new_user.username)
+    csrf = uuid.uuid4().hex
+    try:
+        _set_auth_cookies(
+            response,
+            access_token=tokens["access_token"],
+            refresh_token=tokens["refresh_token"],
+            csrf_token=csrf,
+        )
+    except Exception:
+        pass
+    return tokens
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-def login(request: LoginRequest, req: Request, db: Session = Depends(database.get_db)):
+def login(request: LoginRequest, req: Request, response: Response, db: Session = Depends(database.get_db)):
     _rate_limit(req, key="auth:login", limit=20, window_seconds=60)
     user = auth.authenticate_user(db, request.username, request.password)
     if not user:
@@ -1016,18 +1116,68 @@ def login(request: LoginRequest, req: Request, db: Session = Depends(database.ge
             detail="نام کاربری یا رمز عبور اشتباه است",
         )
     tokens = auth.create_tokens(user.username)
+    csrf = uuid.uuid4().hex
+    try:
+        _set_auth_cookies(
+            response,
+            access_token=tokens["access_token"],
+            refresh_token=tokens["refresh_token"],
+            csrf_token=csrf,
+        )
+    except Exception:
+        pass
     return tokens
 
 
 @app.post("/api/auth/refresh", response_model=TokenResponse)
-def refresh_access_token(request: RefreshRequest, req: Request, db: Session = Depends(database.get_db)):
+def refresh_access_token(
+    req: Request,
+    response: Response,
+    db: Session = Depends(database.get_db),
+    refresh_cookie: str | None = None,
+    request: RefreshRequest | None = Body(None),
+):
     """Issue a new access token using a valid refresh token."""
     _rate_limit(req, key="auth:refresh", limit=30, window_seconds=60)
-    username = auth.decode_refresh_token(request.refresh_token)
+
+    refresh_token = None
+    try:
+        refresh_token = (request.refresh_token if request is not None else None)
+    except Exception:
+        refresh_token = None
+
+    if not refresh_token:
+        try:
+            refresh_token = (req.cookies.get("refresh_token") if req and req.cookies else None)
+        except Exception:
+            refresh_token = None
+
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    username = auth.decode_refresh_token(refresh_token)
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials")
-    return auth.create_tokens(username)
+
+    tokens = auth.create_tokens(username)
+    csrf = uuid.uuid4().hex
+    try:
+        _set_auth_cookies(
+            response,
+            access_token=tokens["access_token"],
+            refresh_token=tokens["refresh_token"],
+            csrf_token=csrf,
+        )
+    except Exception:
+        pass
+    return tokens
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    _clear_auth_cookies(response)
+    return {"message": "logged out"}
 
 @app.get("/api/auth/me", response_model=schemas.User)
 def get_current_user(

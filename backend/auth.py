@@ -2,7 +2,7 @@
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
-from fastapi import Depends, HTTPException, status, Header
+from fastapi import Depends, HTTPException, status, Header, Cookie
 from sqlalchemy.orm import Session
 import os
 from dotenv import load_dotenv
@@ -107,19 +107,31 @@ def decode_refresh_token(refresh_token: str) -> str:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
 # --- اصلاح مهم: دریافت توکن از هدر ---
-def get_current_user(authorization: str = Header(None), db: Session = Depends(get_db)):
+def get_current_user(
+    authorization: str | None = Header(None),
+    access_token: str | None = Cookie(None),
+    db: Session = Depends(get_db),
+):
     """کاربر جاری را دریافت کن"""
-    if authorization is None:
-        raise HTTPException(status_code=401, detail="Missing Authorization Header")
+    token: str | None = None
+
+    # Prefer explicit Authorization header for API clients.
+    if authorization is not None and str(authorization).strip():
+        token = str(authorization).strip()
+    # Browser-safe default: allow HttpOnly cookie-based sessions.
+    elif access_token is not None and str(access_token).strip():
+        token = str(access_token).strip()
+    else:
+        raise HTTPException(status_code=401, detail="Missing credentials")
     
     try:
         # جدا کردن Bearer از توکن
-        if " " in authorization:
-            scheme, token = authorization.split()
+        if token and " " in token:
+            scheme, token = token.split()
             if scheme.lower() != "bearer":
                 raise HTTPException(status_code=401, detail="Invalid authentication scheme")
         else:
-            token = authorization
+            token = token
 
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
