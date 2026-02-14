@@ -2,7 +2,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy import func, case
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
@@ -375,6 +375,10 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
+# Private uploads are stored on disk but never exposed via StaticFiles.
+UPLOAD_PRIVATE_DIR = "uploads_private"
+os.makedirs(UPLOAD_PRIVATE_DIR, exist_ok=True)
+
 # CORS
 # - In production, default to fail-closed for cross-origin (allow_origins=[] when env is not set).
 # - Same-origin deployments do not rely on CORS, so this is safe.
@@ -429,6 +433,7 @@ async def security_headers_middleware(request: Request, call_next):
 async def upload_file(
     file: UploadFile = File(...),
     candidate_name: str | None = Form(None),
+    visibility: str | None = Form(None),
     current_user: models.User = Depends(auth.get_current_user),
     request: Request,
 ):
@@ -439,6 +444,11 @@ async def upload_file(
         v = re.sub(r"[^\w\-\.]+", "", v, flags=re.UNICODE)
         v = v.strip("._-")
         return (v[:80] or "file")
+
+    # Visibility: public (served from /uploads) vs private (served via auth-gated API).
+    v = (visibility or os.getenv("UPLOAD_DEFAULT_VISIBILITY") or "public").strip().lower()
+    if v not in {"public", "private"}:
+        raise HTTPException(status_code=422, detail={"message": "visibility باید public یا private باشد."})
 
     original_name = (file.filename or "").strip()
     original_ext = os.path.splitext(original_name)[1].lower()
@@ -483,7 +493,8 @@ async def upload_file(
     except Exception:
         pass
 
-    file_location = os.path.join(UPLOAD_DIR, filename)
+    target_dir = UPLOAD_DIR if v == "public" else UPLOAD_PRIVATE_DIR
+    file_location = os.path.join(target_dir, filename)
     written = 0
     try:
         with open(file_location, "wb+") as buffer:
@@ -508,14 +519,70 @@ async def upload_file(
         except Exception:
             pass
 
+    if v == "public":
+        base = ""
+        try:
+            if request is not None and request.base_url:
+                base = str(request.base_url).rstrip("/")
+        except Exception:
+            base = ""
+        url = f"{base}/uploads/{filename}" if base else f"/uploads/{filename}"
+        return {"url": url, "filename": filename, "visibility": "public"}
+
+    # Private: persist a record and return an auth-gated URL.
+    asset = models.UploadAsset(
+        owner_user_id=int(current_user.id),
+        visibility="private",
+        stored_filename=filename,
+        original_filename=(original_name or None),
+        content_type=(file.content_type or None),
+    )
+    db = database.SessionLocal()
+    try:
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+    finally:
+        db.close()
+
     base = ""
     try:
         if request is not None and request.base_url:
             base = str(request.base_url).rstrip("/")
     except Exception:
         base = ""
-    url = f"{base}/uploads/{filename}" if base else f"/uploads/{filename}"
-    return {"url": url, "filename": filename}
+    url = f"{base}/api/uploads/private/{asset.id}" if base else f"/api/uploads/private/{asset.id}"
+    return {"url": url, "id": asset.id, "filename": filename, "visibility": "private"}
+
+
+@app.get("/api/uploads/private/{asset_id}")
+def download_private_upload(
+    asset_id: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    asset = db.query(models.UploadAsset).filter(models.UploadAsset.id == str(asset_id)).first()
+    if asset is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if current_user.role != "ADMIN" and int(asset.owner_user_id) != int(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    filename = (asset.stored_filename or "").replace("..", "").lstrip("/\\")
+    path = os.path.join(UPLOAD_PRIVATE_DIR, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Prevent caching of private content.
+    headers = {"Cache-Control": "no-store"}
+    media_type = (asset.content_type or "application/octet-stream").strip() or "application/octet-stream"
+
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=asset.original_filename or asset.stored_filename,
+        headers=headers,
+    )
 
 
 @app.post("/api/upload/voice-intro")

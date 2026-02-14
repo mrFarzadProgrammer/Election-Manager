@@ -259,6 +259,26 @@ class BotCommitment(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+
+class UploadAsset(Base):
+    __tablename__ = "upload_assets"
+
+    # Use UUID primary key to prevent enumeration.
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    owner_user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+
+    # public | private
+    visibility = Column(String, default="private", nullable=False)
+
+    stored_filename = Column(String, nullable=False)
+    original_filename = Column(String, nullable=True)
+    content_type = Column(String, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    owner = relationship("User")
+
     progress_logs = relationship(
         "CommitmentProgressLog",
         back_populates="commitment",
