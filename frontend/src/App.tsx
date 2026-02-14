@@ -47,12 +47,12 @@ function App() {
       try {
         if (user.role === 'ADMIN') {
           // Fetch independently to avoid one failure blocking all
-          api.getCandidates().then(setCandidates).catch(e => console.error("Candidates fetch failed", e));
+          api.getCandidates(token).then(setCandidates).catch(e => console.error("Candidates fetch failed", e));
           api.getPlans().then(setPlans).catch(e => console.error("Plans fetch failed", e));
           api.getTickets().then(setTickets).catch(e => console.error("Tickets fetch failed", e));
         } else if (user.role === 'CANDIDATE') {
           // For candidate, we need to find their candidate profile
-          api.getCandidates().then(allCandidates => {
+          api.getCandidates(token).then(allCandidates => {
             const me = allCandidates.find(c => c.id === user.id);
             if (me) setCandidate(me);
           }).catch(e => console.error("Candidate profile fetch failed", e));

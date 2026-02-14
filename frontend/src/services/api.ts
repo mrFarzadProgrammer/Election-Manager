@@ -941,9 +941,14 @@ export const api = {
         );
     },
 
-    getCandidates: async (): Promise<Candidate[]> => {
+    getCandidates: async (token?: string | null): Promise<Candidate[]> => {
         try {
-            const data = await request<any[]>("/api/candidates");
+            const headers: Record<string, string> = {};
+            if (token) headers.Authorization = `Bearer ${token}`;
+            const data = await request<any[]>("/api/candidates", {
+                method: "GET",
+                headers,
+            });
             if (!Array.isArray(data)) return [];
             return data.map(mapCandidate);
         } catch (error) {
