@@ -13,10 +13,16 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+backend/venv/
 .env
 .env.*
 .pytest_cache/
 .mypy_cache/
+
+# --- Local maintenance artifacts ---
+backup_deleted/
+cleanup/
+cleanup_log.txt
 
 # --- Database files ---
 *.db
@@ -34,3 +40,4 @@ venv/
 *.sln
 *.sw?
 backend/uploads/
+backend/_tmp_exports/

@@ -42,11 +42,9 @@ Election Manager is a full-stack election/voting system with:
 ### Database Operations
 - **Reset DB**: `python backend/reset_db.py` - drops/recreates all tables
 - **Seed Data**: `python backend/seed_data.py` - populates test candidates/plans
-- **Test Endpoints**: Run `python backend/test_api.py` or `comprehensive_test.py` for full suite validation
+- **Verification**: Prefer running Uvicorn + exercising critical flows, and running `npm run build` for frontend
 
 ### Key Testing Files
-- `comprehensive_test.py`: Full test coverage with setup/teardown
-- `simple_test.py`: Quick smoke tests
 - Database tests verify integrity constraints (duplicate username/email/phone/bot_token)
 
 ## Project-Specific Conventions
