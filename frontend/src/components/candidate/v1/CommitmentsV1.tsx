@@ -71,10 +71,6 @@ const CommitmentsV1: React.FC<CommitmentsV1Props> = ({ candidate }) => {
 
     const load = async () => {
         const token = getToken();
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
 
         setIsLoading(true);
         try {
@@ -136,10 +132,6 @@ const CommitmentsV1: React.FC<CommitmentsV1Props> = ({ candidate }) => {
 
     const doAccept = async () => {
         const token = getToken();
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
         if (!acceptChecked) {
             setModal({ variant: 'warning', title: 'نیاز به تأیید', message: 'برای ادامه باید موارد را تأیید کنید.' });
             return;
@@ -160,10 +152,6 @@ const CommitmentsV1: React.FC<CommitmentsV1Props> = ({ candidate }) => {
 
     const doCreate = async () => {
         const token = getToken();
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
         const title = newTitle.trim();
         const description = newDesc.trim();
         if (!title || !description) {
@@ -188,10 +176,6 @@ const CommitmentsV1: React.FC<CommitmentsV1Props> = ({ candidate }) => {
 
     const doSaveDraft = async (commitmentId: number) => {
         const token = getToken();
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
         const patch = draftEdits[commitmentId];
         if (!patch) return;
 
@@ -238,11 +222,6 @@ const CommitmentsV1: React.FC<CommitmentsV1Props> = ({ candidate }) => {
 
     const doConfirm = async () => {
         const token = getToken();
-        if (!token) {
-            setConfirm(null);
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
         if (!confirm) return;
         const id = confirm.commitmentId;
 
@@ -266,10 +245,6 @@ const CommitmentsV1: React.FC<CommitmentsV1Props> = ({ candidate }) => {
 
     const doUpdateStatus = async (commitmentId: number) => {
         const token = getToken();
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
         const status = statusEdits[commitmentId];
         if (!status) return;
 
@@ -287,10 +262,6 @@ const CommitmentsV1: React.FC<CommitmentsV1Props> = ({ candidate }) => {
 
     const doAddProgress = async (commitmentId: number) => {
         const token = getToken();
-        if (!token) {
-            setModal({ variant: 'warning', title: 'نیاز به ورود', message: 'ابتدا وارد حساب کاربری شوید.' });
-            return;
-        }
         const note = (progressDraft[commitmentId] || '').trim();
         if (!note) {
             setModal({ variant: 'warning', title: 'متن خالی', message: 'متن گزارش پیشرفت را وارد کنید.' });

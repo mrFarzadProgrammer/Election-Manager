@@ -41,10 +41,6 @@ const MonitoringTab: React.FC = () => {
     const token = useMemo(() => localStorage.getItem('access_token') || '', []);
 
     const load = async () => {
-        if (!token) {
-            setError('برای مشاهده Monitoring باید وارد شوید.');
-            return;
-        }
         setLoading(true);
         setError(null);
         try {
@@ -88,7 +84,6 @@ const MonitoringTab: React.FC = () => {
     }, [tab]);
 
     const onExport = async (kind: ExportKind) => {
-        if (!token) return;
         setLoading(true);
         setError(null);
         try {

@@ -19,7 +19,6 @@ const BotRequestsTab: React.FC = () => {
 
     const load = async () => {
         const token = getToken();
-        if (!token) return;
         setIsLoading(true);
         try {
             const rows = await api.getBotRequests(token, filterStatus || undefined);
@@ -39,7 +38,6 @@ const BotRequestsTab: React.FC = () => {
 
     const handleStatusChange = async (id: string, next: string) => {
         const token = getToken();
-        if (!token) return;
         const prev = items;
         setItems(prevItems => prevItems.map(it => it.id === id ? { ...it, status: next } : it));
         try {
