@@ -1,5 +1,5 @@
 # database.py
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from dotenv import load_dotenv
 import os
@@ -9,10 +9,43 @@ load_dotenv()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'election_manager.db')}")
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
-)
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        raw = (os.getenv(name) or "").strip()
+        return int(raw) if raw else int(default)
+    except Exception:
+        return int(default)
+
+
+if "sqlite" in DATABASE_URL:
+    sqlite_timeout = _env_int("SQLITE_BUSY_TIMEOUT_SEC", 30)
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False, "timeout": sqlite_timeout},
+    )
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, _connection_record):
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute(f"PRAGMA busy_timeout={sqlite_timeout * 1000}")
+            cursor.close()
+        except Exception:
+            return
+else:
+    pool_size = _env_int("DB_POOL_SIZE", 10)
+    max_overflow = _env_int("DB_MAX_OVERFLOW", 20)
+    pool_timeout = _env_int("DB_POOL_TIMEOUT_SEC", 30)
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_timeout=pool_timeout,
+    )
 
 
 def _ensure_sqlite_table_column(table_name: str, column_name: str, sql_type: str) -> None:

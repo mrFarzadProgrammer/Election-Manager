@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CandidateData } from '../../../types';
 import { Save, Upload, Image as ImageIcon, User } from 'lucide-react';
 import { api } from '../../../services/api';
+import { getLegacyAccessToken } from '../../../services/api';
 import ResultModal, { ResultModalVariant } from '../ui/ResultModal';
 
 interface RepresentativeProfileV1Props {
@@ -68,7 +69,7 @@ const RepresentativeProfileV1: React.FC<RepresentativeProfileV1Props> = ({ candi
     };
 
     const handleSave = async () => {
-        const token = localStorage.getItem('access_token') || '';
+        const token = getLegacyAccessToken();
 
         const trimmedSlogan = (slogan || '').trim();
         if (trimmedSlogan.length > MAX_SLOGAN) {

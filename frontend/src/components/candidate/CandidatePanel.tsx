@@ -45,7 +45,17 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
     const [panelModal, setPanelModal] = useState<null | { variant: 'info' | 'warning' | 'error' | 'success'; title: string; message: string }>(null);
     const [readTicketTimes, setReadTicketTimes] = useState<{ [key: string]: number }>(() => {
         const saved = localStorage.getItem('read_ticket_times');
-        return saved ? JSON.parse(saved) : {};
+        if (!saved) return {};
+        try {
+            return JSON.parse(saved) || {};
+        } catch {
+            try {
+                localStorage.removeItem('read_ticket_times');
+            } catch {
+                // ignore
+            }
+            return {};
+        }
     });
 
     const handleTicketOpen = (ticketId: string) => {

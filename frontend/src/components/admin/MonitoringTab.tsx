@@ -38,14 +38,14 @@ const MonitoringTab: React.FC = () => {
     const [healthChecks, setHealthChecks] = useState<HealthCheckItem[]>([]);
     const [flowDrops, setFlowDrops] = useState<FlowDropItem[]>([]);
 
-    const token = useMemo(() => localStorage.getItem('access_token') || '', []);
+    const getToken = () => localStorage.getItem('access_token') || '';
 
     const load = async () => {
         setLoading(true);
         setError(null);
         try {
             if (tab === 'ERRORS') {
-                const data = await api.getMonitoringErrors(token, {
+                const data = await api.getMonitoringErrors(getToken(), {
                     representativeId: repIdNum,
                     startDate: startDate || null,
                     endDate: endDate || null,
@@ -54,18 +54,18 @@ const MonitoringTab: React.FC = () => {
                 setErrors(data || []);
             } else if (tab === 'UX') {
                 const [logs, drops] = await Promise.all([
-                    api.getMonitoringUxLogs(token, {
+                    api.getMonitoringUxLogs(getToken(), {
                         representativeId: repIdNum,
                         startDate: startDate || null,
                         endDate: endDate || null,
                         limit: 1000,
                     }),
-                    api.getMonitoringFlowDrops(token, repIdNum),
+                    api.getMonitoringFlowDrops(getToken(), repIdNum),
                 ]);
                 setUxLogs(logs || []);
                 setFlowDrops(drops || []);
             } else {
-                const data = await api.getMonitoringHealthChecks(token, {
+                const data = await api.getMonitoringHealthChecks(getToken(), {
                     representativeId: repIdNum,
                     limit: 500,
                 });
@@ -88,21 +88,21 @@ const MonitoringTab: React.FC = () => {
         setError(null);
         try {
             if (kind === 'technical_errors') {
-                const blob = await api.exportMonitoringErrorsXlsx(token, {
+                const blob = await api.exportMonitoringErrorsXlsx(getToken(), {
                     representativeId: repIdNum,
                     startDate: startDate || null,
                     endDate: endDate || null,
                 });
                 downloadBlob(blob, 'monitoring_errors.xlsx');
             } else if (kind === 'ux_logs') {
-                const blob = await api.exportMonitoringUxLogsXlsx(token, {
+                const blob = await api.exportMonitoringUxLogsXlsx(getToken(), {
                     representativeId: repIdNum,
                     startDate: startDate || null,
                     endDate: endDate || null,
                 });
                 downloadBlob(blob, 'monitoring_ux_logs.xlsx');
             } else {
-                const blob = await api.exportMonitoringFlowDropsXlsx(token, repIdNum);
+                const blob = await api.exportMonitoringFlowDropsXlsx(getToken(), repIdNum);
                 downloadBlob(blob, 'monitoring_flow_drops.xlsx');
             }
         } catch (e: any) {

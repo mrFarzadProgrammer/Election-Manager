@@ -97,7 +97,7 @@ class User(BaseModel):
 class CandidateCreate(BaseModel):
     name: str # Maps to full_name
     username: str
-    password: str
+    password: str = Field(min_length=8)
     phone: Optional[str] = None
     bot_name: str
     bot_token: str
@@ -118,7 +118,7 @@ class CandidateCreate(BaseModel):
 class CandidateUpdate(BaseModel):
     name: Optional[str] = None # Maps to full_name
     username: Optional[str] = None
-    password: Optional[str] = None # Added for password update
+    password: Optional[str] = Field(default=None, min_length=8)  # Added for password update
     phone: Optional[str] = None
     bot_name: Optional[str] = None
     bot_token: Optional[str] = None
@@ -245,7 +245,7 @@ class Ticket(BaseModel):
         from_attributes = True
 
 class PasswordResetRequest(BaseModel):
-    password: str = Field(min_length=4)
+    password: str = Field(min_length=8)
 
 # --- Bot Submissions (Feedback MVP) ---
 class FeedbackStatus(str):

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CandidateData } from '../../../types';
 import { Mic, Save, Upload, Square, Trash2 } from 'lucide-react';
 import { api } from '../../../services/api';
+import { getLegacyAccessToken } from '../../../services/api';
 import ResultModal, { ResultModalVariant } from '../ui/ResultModal';
 
 interface VoiceIntroV1Props {
@@ -364,7 +365,7 @@ const VoiceIntroV1: React.FC<VoiceIntroV1Props> = ({ candidate, onUpdate }) => {
     };
 
     const handleSave = async () => {
-        const token = localStorage.getItem('access_token') || '';
+        const token = getLegacyAccessToken();
 
         if (isRecording) {
             setModal({ variant: 'warning', title: 'ضبط فعال است', message: 'ابتدا ضبط را متوقف کنید.' });

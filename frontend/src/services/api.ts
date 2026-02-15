@@ -57,6 +57,52 @@ export const API_BASE =
         return "http://127.0.0.1:8000";
     })();
 
+// Security posture: prefer HttpOnly cookie sessions.
+// Legacy token storage (localStorage) increases XSS impact; keep it dev-only by default.
+export const LEGACY_TOKEN_STORAGE_ENABLED = (() => {
+    try {
+        // Vite env flags
+        const envAny: any = (import.meta as any)?.env;
+        if (envAny?.DEV) return true;
+        const explicit = String(envAny?.VITE_ENABLE_LEGACY_TOKENS || "").trim().toLowerCase();
+        if (explicit) return ["1", "true", "yes", "on"].includes(explicit);
+    } catch {
+        // ignore
+    }
+    return false;
+})();
+
+export const getLegacyAccessToken = (): string => {
+    if (!LEGACY_TOKEN_STORAGE_ENABLED) return "";
+    try {
+        return localStorage.getItem("access_token") || "";
+    } catch {
+        return "";
+    }
+};
+
+export const getLegacyRefreshToken = (): string => {
+    if (!LEGACY_TOKEN_STORAGE_ENABLED) return "";
+    try {
+        return localStorage.getItem("refresh_token") || "";
+    } catch {
+        return "";
+    }
+};
+
+(() => {
+    // In production builds, clear any leftover legacy tokens unless explicitly enabled.
+    try {
+        const envAny: any = (import.meta as any)?.env;
+        if (envAny?.PROD && !LEGACY_TOKEN_STORAGE_ENABLED) {
+            localStorage.removeItem("access_token");
+            localStorage.removeItem("refresh_token");
+        }
+    } catch {
+        // ignore
+    }
+})();
+
 const normalizeAbsoluteUrl = (url: any): any => {
     if (typeof url !== "string") return url;
     const trimmed = url.trim();
@@ -129,6 +175,10 @@ const normalizeAuthorizationValue = (value: any): string => {
     const cleaned = raw.replace(/[\u0000-\u001F\u007F]/g, "").trim();
     if (!cleaned) return "";
 
+    // Common bug: passing an empty token as `Bearer ${token}` results in "Bearer".
+    // Treat it as missing auth so cookie-based sessions can work.
+    if (/^Bearer$/i.test(cleaned)) return "";
+
     const m = /^Bearer\s+(.*)$/i.exec(cleaned);
     const candidate = (m ? m[1] : cleaned).trim();
     if (!candidate) return "";
@@ -188,7 +238,7 @@ const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
             const data = (await res.json()) as RefreshResponse;
             if (data?.access_token) {
                 // Legacy compatibility: if the app is still using localStorage tokens, keep them updated.
-                if (localStorage.getItem("refresh_token")) {
+                if (LEGACY_TOKEN_STORAGE_ENABLED && localStorage.getItem("refresh_token")) {
                     localStorage.setItem("access_token", data.access_token);
                     if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
                 }
@@ -200,6 +250,7 @@ const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
     }
 
     // Fallback: legacy refresh_token in localStorage.
+    if (!LEGACY_TOKEN_STORAGE_ENABLED) return null;
     const refreshToken = localStorage.getItem("refresh_token");
     if (!refreshToken) return null;
     try {

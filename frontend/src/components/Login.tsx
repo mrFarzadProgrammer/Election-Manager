@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { api } from '../services/api';
+import { LEGACY_TOKEN_STORAGE_ENABLED } from '../services/api';
 import { Vote, User as UserIcon, Lock, ArrowRight } from 'lucide-react';
 import QuotesCarousel from './QuotesCarousel';
 
@@ -19,13 +20,29 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         setLoading(true);
 
         try {
-            await api.login(username, password);
+            const tokens = await api.login(username, password);
 
-            // Prefer cookie-based session (HttpOnly tokens). Clear any legacy stored tokens.
-            localStorage.removeItem('access_token');
-            localStorage.removeItem('refresh_token');
+            // Prefer cookie-based session (HttpOnly tokens) first.
+            // If cookies aren't available (dev proxy / browser policy), fall back to legacy
+            // token-in-storage to avoid immediate "session expired" errors.
+            try {
+                const user = await api.getMe('');
+                localStorage.removeItem('access_token');
+                localStorage.removeItem('refresh_token');
+                onLogin(user);
+                return;
+            } catch {
+                // Cookie session didn't work.
+            }
 
-            const user = await api.getMe('');
+            if (!LEGACY_TOKEN_STORAGE_ENABLED) {
+                throw new Error('ورود امن با کوکی انجام نشد. لطفاً تنظیمات کوکی/مرورگر را بررسی کنید.');
+            }
+
+            if (tokens?.access_token) localStorage.setItem('access_token', tokens.access_token);
+            if (tokens?.refresh_token) localStorage.setItem('refresh_token', tokens.refresh_token);
+
+            const user = await api.getMe(tokens?.access_token || '');
             onLogin(user);
         } catch (err: any) {
             setError(err.message || "خطا در ورود به سیستم");
@@ -105,17 +122,25 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                         </button>
                     </form>
 
-                    <div className="mt-8 p-6 border border-dashed border-gray-300 rounded-xl bg-gray-50/50">
-                        <div className="text-center text-sm text-gray-500">
-                            <p className="font-medium text-gray-700 mb-2">داده‌های تست</p>
-                            <div className="grid grid-cols-1 gap-2">
-                                <div className="bg-white p-2 rounded border border-gray-200">
-                                    <span className="block font-bold text-blue-600">مدیر کل</span>
-                                    <code className="text-xs">admin / admin123</code>
+                    {(() => {
+                        try {
+                            return (import.meta as any)?.env?.DEV;
+                        } catch {
+                            return false;
+                        }
+                    })() && (
+                            <div className="mt-8 p-6 border border-dashed border-gray-300 rounded-xl bg-gray-50/50">
+                                <div className="text-center text-sm text-gray-500">
+                                    <p className="font-medium text-gray-700 mb-2">داده‌های تست</p>
+                                    <div className="grid grid-cols-1 gap-2">
+                                        <div className="bg-white p-2 rounded border border-gray-200">
+                                            <span className="block font-bold text-blue-600">مدیر کل</span>
+                                            <code className="text-xs">admin / admin123</code>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    </div>
+                        )}
                 </div>
             </div>
 

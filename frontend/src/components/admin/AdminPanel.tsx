@@ -32,7 +32,17 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ candidates, setCandidates, plan
     // Read receipts state
     const [readTicketTimes, setReadTicketTimes] = useState<{ [key: string]: number }>(() => {
         const saved = localStorage.getItem('admin_read_ticket_times');
-        return saved ? JSON.parse(saved) : {};
+        if (!saved) return {};
+        try {
+            return JSON.parse(saved) || {};
+        } catch {
+            try {
+                localStorage.removeItem('admin_read_ticket_times');
+            } catch {
+                // ignore
+            }
+            return {};
+        }
     });
 
     const handleTicketOpen = (ticketId: string) => {

@@ -11,6 +11,14 @@ Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
 
+# High-load tuning (adjust to your CPU/RAM/DB capacity)
+# - Polling can't run on multiple machines for one token; scale via concurrent update processing.
+Environment=BOT_CONCURRENT_UPDATES=128
+Environment=TELEGRAM_CONNECTION_POOL_SIZE=64
+
+# If using SQLite under load, this reduces "database is locked" errors (seconds)
+Environment=SQLITE_BUSY_TIMEOUT_SEC=30
+
 # If you use a venv, replace ExecStart with:
 # ExecStart=/opt/election-manager/.venv/bin/python bot_runner.py
 

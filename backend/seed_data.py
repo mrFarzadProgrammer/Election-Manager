@@ -3,6 +3,20 @@ import models
 import auth
 import random
 import jdatetime
+import os
+
+
+def _env_truthy(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+APP_ENV = (os.getenv("APP_ENV") or os.getenv("ENV") or "development").strip().lower()
+
+
+if APP_ENV in {"production", "prod"} and not _env_truthy("ALLOW_SEED_IN_PROD"):
+    raise SystemExit(
+        "Refusing to run seed_data.py in production. Set ALLOW_SEED_IN_PROD=1 if you are absolutely sure."
+    )
 
 def seed_database():
     """ایجاد دیتای اولیه: ادمین، پلن‌ها و ۲۰ کاندیدای نمونه"""
@@ -166,7 +180,7 @@ def seed_database():
                     email=f"{username}@example.com",
                     phone=phone,
                     full_name=full_name,
-                    hashed_password=auth.get_password_hash("123456"), # رمز پیش‌فرض
+                    hashed_password=auth.get_password_hash("candidate123"), # رمز پیش‌فرض (dev only)
                     role="CANDIDATE",
                     is_active=True,
                     city=selected_city,

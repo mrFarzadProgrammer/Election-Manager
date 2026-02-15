@@ -31,6 +31,10 @@ cleanup_log.txt
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
 
 # --- Editors/OS ---
 .vscode/*
@@ -43,4 +47,5 @@ cleanup_log.txt
 *.sln
 *.sw?
 backend/uploads/
+backend/uploads_private/
 backend/_tmp_exports/

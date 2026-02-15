@@ -116,8 +116,10 @@ def get_current_user(
     token: str | None = None
 
     # Prefer explicit Authorization header for API clients.
-    if authorization is not None and str(authorization).strip():
-        token = str(authorization).strip()
+    authz = (str(authorization).strip() if authorization is not None else "")
+    # Ignore empty/bare scheme values like "Bearer" so cookie-sessions keep working.
+    if authz and authz.lower() != "bearer":
+        token = authz
     # Browser-safe default: allow HttpOnly cookie-based sessions.
     elif access_token is not None and str(access_token).strip():
         token = str(access_token).strip()
@@ -127,11 +129,12 @@ def get_current_user(
     try:
         # جدا کردن Bearer از توکن
         if token and " " in token:
-            scheme, token = token.split()
-            if scheme.lower() != "bearer":
+            scheme, raw = token.split(" ", 1)
+            scheme = (scheme or "").strip().lower()
+            raw = (raw or "").strip()
+            if scheme != "bearer" or not raw:
                 raise HTTPException(status_code=401, detail="Invalid authentication scheme")
-        else:
-            token = token
+            token = raw
 
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")

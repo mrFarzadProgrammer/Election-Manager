@@ -42,6 +42,23 @@ except Exception:
 
 FAILED_BOT_COOLDOWN = timedelta(minutes=5)
 
+# Update processing concurrency (python-telegram-bot)
+#
+# Polling cannot be horizontally scaled for a single bot token (Telegram 409 Conflict),
+# so the main lever for handling high message volume is *concurrent update processing*
+# inside one runner process.
+#
+# Set BOT_CONCURRENT_UPDATES to control max concurrent updates per bot.
+# Example: 64, 128, 256 (depends on CPU/DB/network).
+BOT_CONCURRENT_UPDATES = int((os.getenv("BOT_CONCURRENT_UPDATES") or "64").strip() or "64")
+if BOT_CONCURRENT_UPDATES < 1:
+    BOT_CONCURRENT_UPDATES = 1
+
+# Telegram HTTP connection pool size for bot API calls.
+TELEGRAM_CONNECTION_POOL_SIZE = int((os.getenv("TELEGRAM_CONNECTION_POOL_SIZE") or "32").strip() or "32")
+if TELEGRAM_CONNECTION_POOL_SIZE < 4:
+    TELEGRAM_CONNECTION_POOL_SIZE = 4
+
 # Notify admin when a new BOT_REQUEST is submitted.
 # NOTE: Telegram bots can only message users who have started that bot.
 BOT_NOTIFY_ADMIN_USERNAME = (os.getenv("BOT_NOTIFY_ADMIN_USERNAME") or "mrFarzadMdi").lstrip("@").strip()
@@ -340,7 +357,7 @@ BTN_HQ_ADDRESSES = "📍 آدرس ستادها"
 BTN_VOICE_INTRO = "🎙 معرفی صوتی نماینده"
 
 BTN_BUILD_BOT = "🛠 ساخت بات اختصاصی"
-BTN_ABOUT_BOT = "ℹ️ درباره این بات"
+BTN_ABOUT_BOT = "🤖 درباره این بات"
 
 BTN_PROFILE_SUMMARY = "👤 سوابق"
 BTN_BACK = "🔙 بازگشت"
@@ -1055,6 +1072,89 @@ def acquire_single_instance_lock(lock_path: str) -> None:
     # Windows: use an actual OS-level file lock to avoid unreliable PID checks and
     # cross-session permission issues.
     if os.name == "nt":
+        # First line of defense: a named mutex (works even if TEMP differs per process).
+        # Multiple pollers for the same Telegram token cause 409 Conflict.
+        try:
+            import atexit
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+            CreateMutexW = kernel32.CreateMutexW
+            CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+            CreateMutexW.restype = wintypes.HANDLE
+
+            WaitForSingleObject = kernel32.WaitForSingleObject
+            WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            WaitForSingleObject.restype = wintypes.DWORD
+
+            ReleaseMutex = kernel32.ReleaseMutex
+            ReleaseMutex.argtypes = [wintypes.HANDLE]
+            ReleaseMutex.restype = wintypes.BOOL
+
+            CloseHandle = kernel32.CloseHandle
+            CloseHandle.argtypes = [wintypes.HANDLE]
+            CloseHandle.restype = wintypes.BOOL
+
+            WAIT_OBJECT_0 = 0
+            WAIT_TIMEOUT = 258
+            WAIT_ABANDONED = 0x80
+
+            def _try_acquire_mutex(name: str):
+                h = CreateMutexW(None, False, name)
+                if not h:
+                    return None, False
+
+                res = int(WaitForSingleObject(h, 0))
+                if res == WAIT_TIMEOUT:
+                    try:
+                        CloseHandle(h)
+                    except Exception:
+                        pass
+                    return None, False
+
+                if res not in {WAIT_OBJECT_0, WAIT_ABANDONED}:
+                    try:
+                        CloseHandle(h)
+                    except Exception:
+                        pass
+                    return None, False
+
+                return h, True
+
+            h, ok = _try_acquire_mutex("Global\\ElectionManagerBotRunner")
+            if not ok:
+                h, ok = _try_acquire_mutex("Local\\ElectionManagerBotRunner")
+
+            if not ok:
+                raise SystemExit("bot_runner already running (Windows mutex)")
+
+            if h is not None and ok:
+                global _WIN_MUTEX_HANDLE
+                _WIN_MUTEX_HANDLE = h
+
+                def _cleanup_mutex() -> None:
+                    try:
+                        if _WIN_MUTEX_HANDLE:
+                            try:
+                                ReleaseMutex(_WIN_MUTEX_HANDLE)
+                            except Exception:
+                                pass
+                            try:
+                                CloseHandle(_WIN_MUTEX_HANDLE)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                atexit.register(_cleanup_mutex)
+        except SystemExit:
+            raise
+        except Exception:
+            # If mutex creation fails for any reason, fall back to file lock.
+            pass
+
         try:
             import msvcrt
 
@@ -1112,69 +1212,6 @@ def acquire_single_instance_lock(lock_path: str) -> None:
             raise
         except Exception:
             # Fall back to mutex+pid file logic below if anything unexpected happens.
-            pass
-
-    # Windows: prefer a named mutex. This is more reliable than a PID/file-only lock,
-    # especially when the venv python.exe is actually a launcher (py.exe).
-    if os.name == "nt":
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            ERROR_ALREADY_EXISTS = 183
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-            CreateMutexW = kernel32.CreateMutexW
-            CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
-            CreateMutexW.restype = wintypes.HANDLE
-
-            ReleaseMutex = kernel32.ReleaseMutex
-            ReleaseMutex.argtypes = [wintypes.HANDLE]
-            ReleaseMutex.restype = wintypes.BOOL
-
-            GetLastError = kernel32.GetLastError
-            GetLastError.argtypes = []
-            GetLastError.restype = wintypes.DWORD
-
-            CloseHandle = kernel32.CloseHandle
-            CloseHandle.argtypes = [wintypes.HANDLE]
-            CloseHandle.restype = wintypes.BOOL
-
-            # Use a Global mutex so background tasks/services can't start a second poller in another session.
-            # If we can't create/open it (permissions/session), fall back to the file lock below.
-            handle = CreateMutexW(None, True, "Global\\ElectionManagerBotRunner")
-            if handle:
-                last_err = int(GetLastError())
-                if last_err == ERROR_ALREADY_EXISTS:
-                    try:
-                        # We opened an existing mutex => another instance is running.
-                        CloseHandle(handle)
-                    except Exception:
-                        pass
-                    raise SystemExit("bot_runner already running (Windows mutex)")
-            else:
-                # Can't create/open global mutex; use file lock for a stable machine-wide single instance.
-                raise RuntimeError("Global mutex not available; falling back to file lock")
-
-            global _WIN_MUTEX_HANDLE
-            _WIN_MUTEX_HANDLE = handle
-
-            def _cleanup_mutex() -> None:
-                try:
-                    if _WIN_MUTEX_HANDLE:
-                        try:
-                            ReleaseMutex(_WIN_MUTEX_HANDLE)
-                        except Exception:
-                            pass
-                        CloseHandle(_WIN_MUTEX_HANDLE)
-                except Exception:
-                    pass
-
-            atexit.register(_cleanup_mutex)
-        except SystemExit:
-            raise
-        except Exception:
-            # Fall back to file lock below.
             pass
 
     lock_dir = os.path.dirname(lock_path)
@@ -2703,9 +2740,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == BTN_ABOUT_BOT:
             await safe_reply_text(
                 update.message,
-                "ℹ️ درباره این بات\n\n"
-                "این بات برای ارتباط شفاف شهروندان با نماینده طراحی شده است: پرسش، ثبت دغدغه و مشاهده تعهدات.\n"
-                "برای بازگشت، «بازگشت» را بزنید.",
+                """━━ 🤖 درباره این بات ━━
+
+این بات برای ایجاد یک پل شفاف بین مردم و نمایندگان طراحی شده است.
+
+اینجا می‌تونی:
+❓ سوال‌های واقعی مردم رو ببینی  
+🗣 پاسخ‌های رسمی و ثبت‌شده نمایندگان رو بخونی  
+📌 تعهداتی که اعلام می‌شن رو به‌صورت عمومی دنبال کنی  
+
+🔒 نکته مهم:
+پاسخ‌ها و تعهدات بعد از انتشار قابل ویرایش نیستند و
+همه چیز با تاریخ و زمان ثبت می‌شود.
+
+🎯 هدف ما:
+شفافیت، مسئولیت‌پذیری و دسترسی ساده به اطلاعات
+— بدون حاشیه، بدون تبلیغ.
+
+━━ پایان ━━""",
                 reply_markup=build_other_keyboard(),
             )
             return
@@ -3139,13 +3191,23 @@ async def run_bot(candidate: User):
                 host = (parsed.hostname or "").lower()
                 port = int(parsed.port) if parsed.port is not None else None
                 if host in {"127.0.0.1", "localhost"} and port in {10808}:
-                    logger.warning(
-                        "Ignoring TELEGRAM_PROXY_URL pointing to a local proxy (%s:%s). "
-                        "Set TELEGRAM_ALLOW_LOCAL_PROXY=1 to force using it.",
-                        host,
-                        port,
-                    )
-                    explicit_proxy_url = None
+                    # Only ignore local proxy when direct connectivity works.
+                    # In restricted networks, direct connectivity can fail and the local proxy is required.
+                    if _auto_decide_trust_env_for_telegram():
+                        logger.warning(
+                            "Using TELEGRAM_PROXY_URL local proxy (%s:%s) because direct connectivity failed. "
+                            "Set TELEGRAM_ALLOW_LOCAL_PROXY=1 to force/quiet this warning.",
+                            host,
+                            port,
+                        )
+                    else:
+                        logger.warning(
+                            "Ignoring TELEGRAM_PROXY_URL pointing to a local proxy (%s:%s). "
+                            "Set TELEGRAM_ALLOW_LOCAL_PROXY=1 to force using it.",
+                            host,
+                            port,
+                        )
+                        explicit_proxy_url = None
             except Exception:
                 # If parsing fails, keep the value as-is.
                 pass
@@ -3168,7 +3230,7 @@ async def run_bot(candidate: User):
                 logger.info("Telegram: trust_env=False (direct connection; ignoring system proxy env)")
 
         request_kwargs = dict(
-            connection_pool_size=8,
+            connection_pool_size=TELEGRAM_CONNECTION_POOL_SIZE,
             # Long polling can legitimately hold the connection for >20s.
             # Keep read_timeout comfortably above Telegram's getUpdates long-poll duration
             # to avoid treating normal polling as a fatal timeout.
@@ -3190,7 +3252,16 @@ async def run_bot(candidate: User):
                 request_kwargs["proxy_url"] = request_kwargs.pop("proxy")
             request = HTTPXRequest(**request_kwargs)
         
-        application = Application.builder().token(candidate.bot_token).request(request).build()
+        builder = Application.builder().token(candidate.bot_token).request(request)
+        try:
+            # PTB v20+ supports concurrent update processing.
+            if BOT_CONCURRENT_UPDATES > 1:
+                builder = builder.concurrent_updates(BOT_CONCURRENT_UPDATES)
+        except Exception:
+            # Best-effort: don't break startup on older PTB versions.
+            pass
+
+        application = builder.build()
         
         # Store candidate ID in bot_data for handlers to access
         application.bot_data["candidate_id"] = candidate.id
@@ -3224,7 +3295,7 @@ async def run_bot(candidate: User):
         # Keep the bot running
         return application
 
-    except Exception:
+    except Exception as e:
         logger.exception(f"Failed to start bot for {candidate.full_name}")
         try:
             log_technical_error_sync(

@@ -259,6 +259,17 @@ class BotCommitment(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    progress_logs = relationship(
+        "CommitmentProgressLog",
+        back_populates="commitment",
+        cascade="all, delete-orphan",
+        order_by="CommitmentProgressLog.created_at.asc()",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "key", name="uq_bot_commitment_candidate_key"),
+    )
+
 
 class UploadAsset(Base):
     __tablename__ = "upload_assets"
@@ -278,17 +289,6 @@ class UploadAsset(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     owner = relationship("User")
-
-    progress_logs = relationship(
-        "CommitmentProgressLog",
-        back_populates="commitment",
-        cascade="all, delete-orphan",
-        order_by="CommitmentProgressLog.created_at.asc()",
-    )
-
-    __table_args__ = (
-        UniqueConstraint("candidate_id", "key", name="uq_bot_commitment_candidate_key"),
-    )
 
 
 class CommitmentTermsAcceptance(Base):
