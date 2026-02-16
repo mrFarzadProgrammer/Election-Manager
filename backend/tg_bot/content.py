@@ -1,6 +1,25 @@
+import json
 import os
 
 from .text_utils import normalize_text
+
+
+def _coerce_bot_config(candidate: dict) -> dict:
+    raw = candidate.get("bot_config")
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return {}
+        try:
+            parsed = json.loads(s)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
 
 def candidate_constituency(candidate: dict) -> str:
@@ -8,7 +27,7 @@ def candidate_constituency(candidate: dict) -> str:
     if constituency:
         return constituency
 
-    bot_config = candidate.get("bot_config") or {}
+    bot_config = _coerce_bot_config(candidate)
     constituency = normalize_text(bot_config.get("constituency"))
     if constituency:
         return constituency
@@ -21,7 +40,7 @@ def candidate_constituency(candidate: dict) -> str:
 
 
 def format_structured_resume(candidate: dict) -> str:
-    bot_config = candidate.get("bot_config") or {}
+    bot_config = _coerce_bot_config(candidate)
     structured = bot_config.get("structured_resume")
     if isinstance(structured, dict):
         parts: list[str] = []
@@ -68,7 +87,7 @@ def format_structured_resume(candidate: dict) -> str:
 
 
 def get_program_answer(candidate: dict, index: int) -> str:
-    bot_config = candidate.get("bot_config") or {}
+    bot_config = _coerce_bot_config(candidate)
     programs = bot_config.get("programs")
     if isinstance(programs, list) and 0 <= index < len(programs):
         ans = normalize_text(programs[index])

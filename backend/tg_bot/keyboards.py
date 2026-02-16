@@ -5,6 +5,7 @@ from telegram import ReplyKeyboardMarkup, KeyboardButton
 from .ui_constants import (
     BTN_ABOUT_BOT,
     BTN_ABOUT_INTRO,
+    BTN_ABOUT_MENU,
     BTN_ASK_NEW_QUESTION,
     BTN_BACK,
     BTN_BOT_REQUEST,
@@ -59,7 +60,7 @@ def build_main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton(BTN_COMMITMENTS), KeyboardButton(BTN_QUESTION)],
-            [KeyboardButton(BTN_PROGRAMS), KeyboardButton(BTN_FEEDBACK)],
+            [KeyboardButton(BTN_ABOUT_MENU), KeyboardButton(BTN_FEEDBACK)],
             [KeyboardButton(BTN_OTHER_MENU)],
         ],
         resize_keyboard=True,
@@ -70,8 +71,8 @@ def build_main_keyboard() -> ReplyKeyboardMarkup:
 def build_about_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton(BTN_PROGRAMS), KeyboardButton(BTN_ABOUT_INTRO)],
-            [KeyboardButton(BTN_VOICE_INTRO), KeyboardButton(BTN_HQ_ADDRESSES)],
+            [KeyboardButton(BTN_VOICE_INTRO), KeyboardButton(BTN_ABOUT_INTRO)],
+            [KeyboardButton(BTN_PROGRAMS), KeyboardButton(BTN_HQ_ADDRESSES)],
             [KeyboardButton(BTN_BACK)],
         ],
         resize_keyboard=True,

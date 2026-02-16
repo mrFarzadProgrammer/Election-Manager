@@ -87,10 +87,6 @@ def acquire_single_instance_lock(lock_path: str) -> None:
             CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
             CreateMutexW.restype = wintypes.HANDLE
 
-            WaitForSingleObject = kernel32.WaitForSingleObject
-            WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-            WaitForSingleObject.restype = wintypes.DWORD
-
             ReleaseMutex = kernel32.ReleaseMutex
             ReleaseMutex.argtypes = [wintypes.HANDLE]
             ReleaseMutex.restype = wintypes.BOOL
@@ -99,43 +95,38 @@ def acquire_single_instance_lock(lock_path: str) -> None:
             CloseHandle.argtypes = [wintypes.HANDLE]
             CloseHandle.restype = wintypes.BOOL
 
-            WAIT_OBJECT_0 = 0
-            WAIT_TIMEOUT = 258
-            WAIT_ABANDONED = 0x80
+            ERROR_ALREADY_EXISTS = 183
 
-            def _try_acquire_mutex(name: str):
-                h = CreateMutexW(None, False, name)
+            def _create_owned_mutex(name: str):
+                h = CreateMutexW(None, True, name)
                 if not h:
-                    return None, False
-
-                res = int(WaitForSingleObject(h, 0))
-                if res == WAIT_TIMEOUT:
+                    return None, "unavailable"
+                err = int(ctypes.get_last_error())
+                if err == ERROR_ALREADY_EXISTS:
                     try:
                         CloseHandle(h)
                     except Exception:
                         pass
-                    return None, False
+                    return None, "busy"
+                return h, "acquired"
 
-                if res not in {WAIT_OBJECT_0, WAIT_ABANDONED}:
-                    try:
-                        CloseHandle(h)
-                    except Exception:
-                        pass
-                    return None, False
+            h, status = _create_owned_mutex("Global\\ElectionManagerBotRunner")
+            if status != "acquired":
+                # Fall back to a session-local mutex only if Global mutex is unavailable.
+                # If Global is busy, treat it as already running.
+                if status == "busy":
+                    raise SystemExit(
+                        "bot_runner already running (Windows mutex). "
+                        "If you started it via a VS Code background task, stop that task or kill the existing process."
+                    )
+                h, status = _create_owned_mutex("Local\\ElectionManagerBotRunner")
+                if status != "acquired":
+                    raise SystemExit(
+                        "bot_runner already running (Windows mutex). "
+                        "If you started it via a VS Code background task, stop that task or kill the existing process."
+                    )
 
-                return h, True
-
-            h, ok = _try_acquire_mutex("Global\\ElectionManagerBotRunner")
-            if not ok:
-                h, ok = _try_acquire_mutex("Local\\ElectionManagerBotRunner")
-
-            if not ok:
-                raise SystemExit(
-                    "bot_runner already running (Windows mutex). "
-                    "If you started it via a VS Code background task, stop that task or kill the existing process."
-                )
-
-            if h is not None and ok:
+            if h is not None and status == "acquired":
                 global _WIN_MUTEX_HANDLE
                 _WIN_MUTEX_HANDLE = h
 

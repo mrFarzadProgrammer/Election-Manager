@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import json
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, or_
@@ -72,6 +73,7 @@ from .ui_constants import (
     ROLE_REPRESENTATIVE,
     ROLE_TEAM,
     STATE_ABOUT_MENU,
+    STATE_ABOUT_DETAIL,
     STATE_BOTREQ_CONTACT,
     STATE_BOTREQ_CONSTITUENCY,
     STATE_BOTREQ_NAME,
@@ -323,7 +325,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     candidate_id = context.bot_data.get("candidate_id")
     chat_type = update.message.chat.type
 
-    logger.info("Received message: %r for candidate_id: %s in %s", text, candidate_id, chat_type)
+    logger.info("Received message: raw=%r normalized=%r for candidate_id=%s in %s", raw_text, text, candidate_id, chat_type)
 
     # Legacy cached keyboard labels
     if btn_has(text, "درخواست ساخت بات") and btn_has(text, "اختصاصی"):
@@ -362,7 +364,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not candidate:
         return
 
-    bot_config = candidate.get("bot_config") or {}
+    bot_config = candidate.get("bot_config")
+    if isinstance(bot_config, str):
+        try:
+            parsed = json.loads(bot_config)
+            bot_config = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            bot_config = {}
+    elif not isinstance(bot_config, dict):
+        bot_config = {}
+    candidate["bot_config"] = bot_config
 
     socials = candidate.get("socials") or {}
     if isinstance(socials, dict):
@@ -456,6 +467,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (text or "").strip()
     state = context.user_data.get("state") or STATE_MAIN
 
+    # Be tolerant to old/variant labels for Programs button.
+    # Common cases: emoji moves due to RTL, ZWNJ differences, or older keyboards like "برنامه ها".
+    # Do NOT remap during free-text states (feedback/questions/bot request) to avoid hijacking user input.
+    if state in {STATE_MAIN, STATE_ABOUT_MENU, STATE_OTHER_MENU} and btn_has(text, "برنامه"):
+        if text != BTN_PROGRAMS:
+            logger.info("Mapping Programs button variant: %r -> %r (state=%s)", text, BTN_PROGRAMS, state)
+        text = BTN_PROGRAMS
+
     def _has_recent_bot_request_sync(*, candidate_id: int, telegram_user_id: str, minutes: int, phone: str | None = None) -> bool:
         db = SessionLocal()
         try:
@@ -479,6 +498,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     known_states = {
         STATE_MAIN,
         STATE_ABOUT_MENU,
+        STATE_ABOUT_DETAIL,
         STATE_OTHER_MENU,
         STATE_COMMITMENTS_VIEW,
         STATE_PROGRAMS,
@@ -1198,11 +1218,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == STATE_ABOUT_MENU:
         if text in {BTN_ABOUT_INTRO, BTN_INTRO}:
+            context.user_data["_return_state"] = STATE_ABOUT_MENU
+            context.user_data["state"] = STATE_ABOUT_DETAIL
             text = BTN_INTRO
-        elif text == BTN_PROGRAMS:
+        elif btn_eq(text, BTN_PROGRAMS) or btn_has(text, "برنامه"):
             context.user_data["_return_state"] = STATE_ABOUT_MENU
         elif text in {BTN_HQ_ADDRESSES, BTN_CONTACT}:
+            context.user_data["_return_state"] = STATE_ABOUT_MENU
+            context.user_data["state"] = STATE_ABOUT_DETAIL
             text = BTN_CONTACT
+        elif text == BTN_VOICE_INTRO:
+            context.user_data["_return_state"] = STATE_ABOUT_MENU
+            context.user_data["state"] = STATE_ABOUT_DETAIL
 
     if state == STATE_OTHER_MENU:
         if text == BTN_BUILD_BOT:
@@ -1233,6 +1260,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if text == BTN_INTRO:
+        # If the user entered via the About submenu, keep back-navigation to the About menu.
+        if state == STATE_ABOUT_MENU or context.user_data.get("_return_state") == STATE_ABOUT_MENU:
+            context.user_data["_return_state"] = STATE_ABOUT_MENU
+            context.user_data["state"] = STATE_ABOUT_DETAIL
+            state = STATE_ABOUT_DETAIL
+
         name = normalize_text(candidate.get("name")) or "نماینده"
         constituency = candidate_constituency(candidate)
         slogan = normalize_text(candidate.get("slogan") or (candidate.get("bot_config") or {}).get("slogan"))
@@ -1254,11 +1287,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"حوزه انتخابیه: {constituency}")
         if slogan:
             lines.append(f"📣 {slogan}")
+
         await safe_reply_text(
             update.message,
             "\n".join(lines),
             reply_markup=ReplyKeyboardMarkup(
-                [[KeyboardButton(BTN_PROFILE_SUMMARY), KeyboardButton(BTN_VOICE_INTRO)], [KeyboardButton(BTN_BACK)]],
+                [[KeyboardButton(BTN_PROFILE_SUMMARY), KeyboardButton(BTN_BACK)]],
                 resize_keyboard=True,
                 is_persistent=True,
             ),
@@ -1266,11 +1300,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == BTN_PROFILE_SUMMARY:
+        # When accessed from the About flow, Back should return to the About menu.
+        if state in {STATE_ABOUT_MENU, STATE_ABOUT_DETAIL} or context.user_data.get("_return_state") == STATE_ABOUT_MENU:
+            context.user_data["_return_state"] = STATE_ABOUT_MENU
+            context.user_data["state"] = STATE_ABOUT_DETAIL
+            state = STATE_ABOUT_DETAIL
         resume_text = format_structured_resume(candidate)
         await safe_reply_text(update.message, f"👤 سوابق\n\n{resume_text}", reply_markup=build_back_keyboard())
         return
 
-    if text == BTN_PROGRAMS:
+    if text == BTN_VOICE_INTRO:
+        # If invoked from About (or its detail pages), Back returns to the About menu.
+        if state in {STATE_ABOUT_MENU, STATE_ABOUT_DETAIL} or context.user_data.get("_return_state") == STATE_ABOUT_MENU:
+            context.user_data["_return_state"] = STATE_ABOUT_MENU
+            context.user_data["state"] = STATE_ABOUT_DETAIL
+            state = STATE_ABOUT_DETAIL
+
+        voice_url = normalize_text(candidate.get("voice_url") or (bot_config.get("voice_url") if isinstance(bot_config, dict) else None))
+        if not voice_url:
+            await safe_reply_text(update.message, "🎧 معرفی صوتی نماینده در حال حاضر ثبت نشده است.")
+            return
+
+        caption = "🎧 معرفی صوتی نماینده (حداکثر ۶۰ ثانیه)"
+        try:
+            # Telegram servers cannot fetch localhost/127.0.0.1 URLs.
+            # When running locally, the uploaded file exists on disk, so send it directly.
+            local_path = upload_file_path_from_localhost_url(voice_url)
+            if local_path:
+                ext = os.path.splitext(local_path)[1].lower()
+                with open(local_path, "rb") as f:
+                    if ext == ".ogg":
+                        await update.message.reply_voice(voice=f, caption=caption, reply_markup=build_back_keyboard())
+                    else:
+                        try:
+                            await update.message.reply_audio(audio=f, caption=caption, reply_markup=build_back_keyboard())
+                        except Exception:
+                            await update.message.reply_document(document=f, caption=caption, reply_markup=build_back_keyboard())
+            else:
+                try:
+                    await update.message.reply_voice(voice=voice_url, caption=caption, reply_markup=build_back_keyboard())
+                except Exception:
+                    await update.message.reply_audio(audio=voice_url, caption=caption, reply_markup=build_back_keyboard())
+        except Exception as e:
+            logger.error("Failed to send voice intro: %s", e)
+            await safe_reply_text(update.message, "⚠️ فایل معرفی صوتی در دسترس نیست.")
+        return
+
+    if state in {STATE_MAIN, STATE_ABOUT_MENU, STATE_OTHER_MENU} and (btn_eq(text, BTN_PROGRAMS) or btn_has(text, "برنامه")):
         context.user_data["state"] = STATE_PROGRAMS
         await safe_reply_text(
             update.message,
@@ -1417,6 +1493,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Idle fallback
     if state == STATE_MAIN:
+        try:
+            if raw_text and raw_text != text:
+                logger.info(
+                    "MAIN fallback text mismatch: raw=%r normalized=%r raw_codepoints=%s normalized_codepoints=%s",
+                    raw_text,
+                    text,
+                    [ord(c) for c in raw_text],
+                    [ord(c) for c in text],
+                )
+        except Exception:
+            pass
         context.user_data["state"] = STATE_MAIN
         await safe_reply_text(update.message, "لطفاً یکی از گزینه‌های منو را انتخاب کنید.", reply_markup=build_main_keyboard())
         return

@@ -14,7 +14,29 @@ def normalize_text(value) -> str:
 
 def normalize_button_text(value: str | None) -> str:
     v = normalize_text(value)
-    v = v.replace("\u200c", "").replace("\u200f", "").replace("\ufeff", "")
+    # Strip common invisible/formatting characters that can appear in Telegram button labels
+    # (bidi marks, zero-width chars, variation selectors). This keeps routing robust.
+    for ch in (
+        "\u200b",  # zero-width space
+        "\u200c",  # ZWNJ
+        "\u200d",  # ZWJ
+        "\u200e",  # LRM
+        "\u200f",  # RLM
+        "\u2060",  # word joiner
+        "\ufeff",  # BOM
+        "\ufe0e",  # text variation selector
+        "\ufe0f",  # emoji variation selector
+        "\u2066",  # LRI
+        "\u2067",  # RLI
+        "\u2068",  # FSI
+        "\u2069",  # PDI
+        "\u202a",  # LRE
+        "\u202b",  # RLE
+        "\u202c",  # PDF
+        "\u202d",  # LRO
+        "\u202e",  # RLO
+    ):
+        v = v.replace(ch, "")
     v = re.sub(r"\s+", " ", v).strip()
     return v
 
