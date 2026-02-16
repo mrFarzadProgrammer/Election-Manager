@@ -138,14 +138,31 @@ const extractApiMessage = (payload: ApiErrorPayload, fallback: string) => {
     return fallback;
 };
 
-const readBodySafely = async (res: Response) => {
-    const text = await res.text();
+const repairSuspiciousJsonBackslashes = (text: string): string => {
+    // Heuristic repair for a common invalid-JSON pattern on Windows:
+    // JSON contains a string with an unescaped backslash like "C:\Users\..." but serialized as "C:\Users" (single backslashes).
+    // Any backslash not starting a valid JSON escape sequence must be escaped.
+    return text.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+};
+
+const parseJsonTextSafely = (text: string): any => {
     if (!text) return null;
     try {
         return JSON.parse(text);
     } catch {
-        return { detail: text };
+        try {
+            return JSON.parse(repairSuspiciousJsonBackslashes(text));
+        } catch {
+            return null;
+        }
     }
+};
+
+const readBodySafely = async (res: Response) => {
+    const text = await res.text();
+    if (!text) return null;
+    const parsed = parseJsonTextSafely(text);
+    return parsed ?? { detail: text };
 };
 
 type RefreshResponse = {
@@ -235,7 +252,8 @@ const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
         });
 
         if (res.ok) {
-            const data = (await res.json()) as RefreshResponse;
+            const text = await res.text();
+            const data = (parseJsonTextSafely(text) || null) as RefreshResponse | null;
             if (data?.access_token) {
                 // Legacy compatibility: if the app is still using localStorage tokens, keep them updated.
                 if (LEGACY_TOKEN_STORAGE_ENABLED && localStorage.getItem("refresh_token")) {
@@ -261,7 +279,8 @@ const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
         });
 
         if (!res.ok) return null;
-        const data = (await res.json()) as RefreshResponse;
+        const text = await res.text();
+        const data = (parseJsonTextSafely(text) || null) as RefreshResponse | null;
         if (!data?.access_token) return null;
 
         localStorage.setItem("access_token", data.access_token);
@@ -348,7 +367,10 @@ async function request<T>(path: string, options: RequestInit = {}, _retried: boo
 
     const contentType = res.headers.get("content-type") || "";
     if (contentType.includes("application/json")) {
-        return (await res.json()) as T;
+        const text = await res.text();
+        const parsed = parseJsonTextSafely(text);
+        // If parsing fails, fall back to raw text instead of throwing a SyntaxError.
+        return (parsed ?? (text as any)) as T;
     }
     return (await res.text()) as unknown as T;
 }
