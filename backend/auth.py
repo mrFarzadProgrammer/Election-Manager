@@ -20,8 +20,18 @@ _DEFAULT_REFRESH_SECRET = "your-refresh-secret-key-change-in-production"
 SECRET_KEY = os.getenv("SECRET_KEY", _DEFAULT_SECRET)
 REFRESH_SECRET_KEY = os.getenv("REFRESH_SECRET_KEY", _DEFAULT_REFRESH_SECRET)
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        raw = (os.getenv(name) or "").strip()
+        return int(raw) if raw else int(default)
+    except Exception:
+        return int(default)
+
+
+ACCESS_TOKEN_EXPIRE_MINUTES = max(5, _env_int("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
+REFRESH_TOKEN_EXPIRE_DAYS = max(1, _env_int("REFRESH_TOKEN_EXPIRE_DAYS", 7))
 
 
 def _looks_unsafe_secret(value: str, *, default_value: str) -> bool:

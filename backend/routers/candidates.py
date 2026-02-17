@@ -153,6 +153,19 @@ def update_candidate(
     try:
         previous_voice_url = candidate.voice_url
 
+        # Normalize common string fields to reduce duplicate/dirty data.
+        if isinstance(data.get("username"), str):
+            data["username"] = data["username"].strip()
+        if isinstance(data.get("phone"), str):
+            v = data["phone"].strip()
+            data["phone"] = v or None
+        if isinstance(data.get("bot_name"), str):
+            v = data["bot_name"].strip()
+            data["bot_name"] = v or None
+        if isinstance(data.get("bot_token"), str):
+            v = data["bot_token"].strip()
+            data["bot_token"] = v or None
+
         if "password" in data and data["password"]:
             new_password = (data["password"] or "").strip()
             if len(new_password) < 8:

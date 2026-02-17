@@ -41,8 +41,11 @@ async def run_bot(candidate: User):
         bot_config = getattr(candidate, "bot_config", None) or {}
 
         env_proxy_raw = os.getenv("TELEGRAM_PROXY_URL")
-        if env_proxy_raw is not None:
-            explicit_proxy_url = (str(env_proxy_raw).strip() or None)
+        env_proxy_val = (str(env_proxy_raw).strip() if env_proxy_raw is not None else "")
+
+        # Treat TELEGRAM_PROXY_URL="" as "unset" so we can fall back to bot_config/system proxy.
+        if env_proxy_raw is not None and env_proxy_val:
+            explicit_proxy_url = env_proxy_val
             explicit_proxy_source = "env"
         else:
             explicit_proxy_url = (
@@ -83,34 +86,16 @@ async def run_bot(candidate: User):
             except Exception:
                 pass
 
-        trust_env_raw = (os.getenv("TELEGRAM_TRUST_ENV") or "").strip()
-        if trust_env_raw:
-            trust_env = env_truthy("TELEGRAM_TRUST_ENV") and not bool(explicit_proxy_url)
-        else:
-            trust_env = (not bool(explicit_proxy_url)) and auto_decide_trust_env_for_telegram()
-
-        if explicit_proxy_url:
-            logger.info("Using explicit Telegram proxy (%s) for candidate_id=%s", explicit_proxy_source, candidate.id)
-        else:
-            logger.info("Telegram: trust_env=%s", "True" if trust_env else "False")
-
+        # اگر فقط VPN فعال است، پراکسی را حذف کن و trust_env را True بگذار.
         request_kwargs = dict(
             connection_pool_size=TELEGRAM_CONNECTION_POOL_SIZE,
             read_timeout=90,
             write_timeout=20,
             connect_timeout=20,
             pool_timeout=5,
-            httpx_kwargs={"trust_env": trust_env},
+            httpx_kwargs={"trust_env": True},
         )
-        if explicit_proxy_url:
-            request_kwargs["proxy"] = explicit_proxy_url
-
-        try:
-            request = HTTPXRequest(**request_kwargs)
-        except TypeError:
-            if "proxy" in request_kwargs:
-                request_kwargs["proxy_url"] = request_kwargs.pop("proxy")
-            request = HTTPXRequest(**request_kwargs)
+        request = HTTPXRequest(**request_kwargs)
 
         builder = Application.builder().token(candidate.bot_token).request(request)
         try:

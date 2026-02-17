@@ -955,7 +955,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         BotSubmission.answer.isnot(None),
                         BotSubmission.topic == topic,
                     )
-                    .order_by(BotSubmission.answered_at.desc(), BotSubmission.id.desc())
+                    .order_by(BotSubmission.answered_at.asc(), BotSubmission.id.asc())
                 )
                 return q.all()
             finally:
@@ -1138,12 +1138,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Main menu
-    if text == BTN_ABOUT_MENU:
+    if btn_eq(text, BTN_ABOUT_MENU):
         context.user_data["state"] = STATE_ABOUT_MENU
         await safe_reply_text(update.message, "📂 درباره نماینده\n\nیکی از گزینه‌ها را انتخاب کنید:", reply_markup=build_about_keyboard())
         return
 
-    if text == BTN_OTHER_MENU:
+    if btn_eq(text, BTN_OTHER_MENU):
         context.user_data["state"] = STATE_OTHER_MENU
         try:
             other_image_url = None
@@ -1179,7 +1179,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_reply_text(update.message, "⚙️ سایر امکانات\n\nیکی از گزینه‌ها را انتخاب کنید:", reply_markup=build_other_keyboard())
         return
 
-    if text == BTN_COMMITMENTS:
+    if btn_eq(text, BTN_COMMITMENTS):
         def _get_commitments(cid: int):
             db = SessionLocal()
             try:
@@ -1217,24 +1217,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if state == STATE_ABOUT_MENU:
-        if text in {BTN_ABOUT_INTRO, BTN_INTRO}:
+        if btn_eq(text, BTN_ABOUT_INTRO) or btn_eq(text, BTN_INTRO):
             context.user_data["_return_state"] = STATE_ABOUT_MENU
             context.user_data["state"] = STATE_ABOUT_DETAIL
             text = BTN_INTRO
         elif btn_eq(text, BTN_PROGRAMS) or btn_has(text, "برنامه"):
             context.user_data["_return_state"] = STATE_ABOUT_MENU
-        elif text in {BTN_HQ_ADDRESSES, BTN_CONTACT}:
+        elif btn_eq(text, BTN_HQ_ADDRESSES) or btn_eq(text, BTN_CONTACT):
             context.user_data["_return_state"] = STATE_ABOUT_MENU
             context.user_data["state"] = STATE_ABOUT_DETAIL
             text = BTN_CONTACT
-        elif text == BTN_VOICE_INTRO:
+        elif btn_eq(text, BTN_VOICE_INTRO):
             context.user_data["_return_state"] = STATE_ABOUT_MENU
             context.user_data["state"] = STATE_ABOUT_DETAIL
 
     if state == STATE_OTHER_MENU:
-        if text == BTN_BUILD_BOT:
+        if btn_eq(text, BTN_BUILD_BOT):
             text = BTN_BUILD_BOT
-        elif text == BTN_ABOUT_BOT:
+        elif btn_eq(text, BTN_ABOUT_BOT):
             await safe_reply_text(
                 update.message,
                 """━━ 🤖 درباره این بات ━━
@@ -1259,7 +1259,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    if text == BTN_INTRO:
+    if btn_eq(text, BTN_INTRO):
         # If the user entered via the About submenu, keep back-navigation to the About menu.
         if state == STATE_ABOUT_MENU or context.user_data.get("_return_state") == STATE_ABOUT_MENU:
             context.user_data["_return_state"] = STATE_ABOUT_MENU
@@ -1299,7 +1299,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if text == BTN_PROFILE_SUMMARY:
+    if btn_eq(text, BTN_PROFILE_SUMMARY):
         # When accessed from the About flow, Back should return to the About menu.
         if state in {STATE_ABOUT_MENU, STATE_ABOUT_DETAIL} or context.user_data.get("_return_state") == STATE_ABOUT_MENU:
             context.user_data["_return_state"] = STATE_ABOUT_MENU
@@ -1309,7 +1309,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_reply_text(update.message, f"👤 سوابق\n\n{resume_text}", reply_markup=build_back_keyboard())
         return
 
-    if text == BTN_VOICE_INTRO:
+    if btn_eq(text, BTN_VOICE_INTRO):
         # If invoked from About (or its detail pages), Back returns to the About menu.
         if state in {STATE_ABOUT_MENU, STATE_ABOUT_DETAIL} or context.user_data.get("_return_state") == STATE_ABOUT_MENU:
             context.user_data["_return_state"] = STATE_ABOUT_MENU
@@ -1363,28 +1363,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if text == BTN_FEEDBACK or text == BTN_FEEDBACK_LEGACY:
+    if btn_eq(text, BTN_FEEDBACK) or btn_eq(text, BTN_FEEDBACK_LEGACY):
         context.user_data["state"] = STATE_FEEDBACK_TEXT
         await safe_reply_text(update.message, build_feedback_intro_text(FEEDBACK_INTRO_TEXT, socials), reply_markup=build_back_keyboard())
         await safe_reply_text(update.message, "متن نظر/دغدغه‌تان را ارسال کنید:", reply_markup=build_back_keyboard())
         return
 
-    if text == BTN_QUESTION:
+    if btn_eq(text, BTN_QUESTION):
         context.user_data["state"] = STATE_QUESTION_ENTRY
         await safe_reply_text(update.message, "سؤال از نماینده\nیکی را انتخاب کنید:", reply_markup=build_question_entry_keyboard())
         return
 
-    if text == BTN_REGISTER_QUESTION:
+    if btn_eq(text, BTN_REGISTER_QUESTION):
         context.user_data["state"] = STATE_QUESTION_ASK_ENTRY
         await safe_reply_text(update.message, "برای ثبت سؤال جدید، مرحله بعد را انجام دهید.", reply_markup=build_question_ask_entry_keyboard())
         return
 
-    if text == BTN_SEARCH_QUESTION:
+    if btn_eq(text, BTN_SEARCH_QUESTION):
         context.user_data["state"] = STATE_QUESTION_VIEW_METHOD
         await safe_reply_text(update.message, "برای مشاهده سؤال‌ها، یکی را انتخاب کنید:", reply_markup=build_question_view_method_keyboard())
         return
 
-    if text == BTN_CONTACT:
+    if btn_eq(text, BTN_CONTACT):
         offices = (bot_config.get("offices") if isinstance(bot_config, dict) else None)
         if not isinstance(offices, list):
             offices = []
@@ -1425,7 +1425,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_reply_text(update.message, response.strip(), reply_markup=build_back_keyboard())
         return
 
-    if text == BTN_BUILD_BOT:
+    if btn_eq(text, BTN_BUILD_BOT):
         body = (
             "این بات نمونه‌ای از بات ارتباط مستقیم نماینده با مردم است.\n\n"
             "اگر شما نماینده، کاندیدا یا فعال سیاسی هستید،\n"
@@ -1444,7 +1444,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if text == BTN_BOT_REQUEST:
+    if btn_eq(text, BTN_BOT_REQUEST):
         try:
             track_flow_event_sync(candidate_id=int(candidate_id), flow_type="lead", event="flow_started")
         except Exception:

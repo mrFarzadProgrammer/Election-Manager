@@ -521,6 +521,19 @@ const VoiceIntroV1: React.FC<VoiceIntroV1Props> = ({ candidate, onUpdate }) => {
                             </div>
                         </div>
                         <p className="text-[11px] text-gray-400 mt-2">قوانین: حداکثر ۶۰ ثانیه، فقط mp3 یا ogg، حداکثر ۲MB.</p>
+
+                        {voiceFile && !isRecording && !isStopping && (
+                            <div className="mt-4 flex justify-end">
+                                <button
+                                    onClick={handleSave}
+                                    disabled={isSaving}
+                                    className={`flex items-center gap-2 px-6 py-2.5 rounded-xl transition-colors ${isSaving ? 'bg-gray-300 text-gray-700' : 'bg-green-600 text-white hover:bg-green-700'}`}
+                                >
+                                    <Save size={18} />
+                                    {isSaving ? 'در حال آپلود...' : 'تأیید و آپلود'}
+                                </button>
+                            </div>
+                        )}
                     </div>
 
                     <div className="lg:col-span-5">
@@ -544,17 +557,6 @@ const VoiceIntroV1: React.FC<VoiceIntroV1Props> = ({ candidate, onUpdate }) => {
                             )}
                         </div>
                     </div>
-                </div>
-
-                <div className="flex justify-end mt-6">
-                    <button
-                        onClick={handleSave}
-                        disabled={isSaving || isRecording || isStopping || (isDirty && !voiceFile)}
-                        className={`flex items-center gap-2 px-8 py-3 rounded-xl transition-colors ${isSaving ? 'bg-gray-300 text-gray-700' : 'bg-green-600 text-white hover:bg-green-700'}`}
-                    >
-                        <Save size={18} />
-                        {isSaving ? 'در حال ذخیره...' : 'ذخیره تغییرات'}
-                    </button>
                 </div>
             </div>
         </div>

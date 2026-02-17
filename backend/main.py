@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -33,23 +34,25 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-models.Base.metadata.create_all(bind=database.engine)
-
-
 def _env_truthy(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Application started")
+    logger.info("Application started")
+    try:
+        # Ensure tables exist (best-effort). For long-lived production, prefer Alembic migrations.
+        models.Base.metadata.create_all(bind=database.engine)
+    except Exception:
+        logger.exception("DB create_all failed")
     try:
         ensure_indexes(database.engine)
     except Exception:
         # Best-effort: indexes are an optimization, not a boot blocker.
         pass
     yield
-    print("Application shutdown")
+    logger.info("Application shutdown")
 
 
 _enable_docs = True
@@ -67,18 +70,29 @@ app = FastAPI(
 
 
 @app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    rid = (request.headers.get("x-request-id") or "").strip() or uuid.uuid4().hex
+    request.state.request_id = rid
+    response = await call_next(request)
+    if "x-request-id" not in response.headers:
+        response.headers["X-Request-ID"] = rid
+    return response
+
+
+@app.middleware("http")
 async def monitoring_error_logging_middleware(request: Request, call_next):
     """Minimal technical error logging (MVP)."""
     try:
         response = await call_next(request)
         if getattr(response, "status_code", 200) >= 500:
             try:
+                rid = getattr(getattr(request, "state", None), "request_id", None)
                 db = database.SessionLocal()
                 db.add(
                     models.TechnicalErrorLog(
                         service_name="api",
                         error_type="HTTP_5XX",
-                        error_message=f"{request.method} {request.url.path} -> {response.status_code}",
+                        error_message=f"[rid={rid}] {request.method} {request.url.path} -> {response.status_code}",
                         telegram_user_id=None,
                         candidate_id=None,
                         state=None,
@@ -98,12 +112,13 @@ async def monitoring_error_logging_middleware(request: Request, call_next):
         return response
     except Exception as e:
         try:
+            rid = getattr(getattr(request, "state", None), "request_id", None)
             db = database.SessionLocal()
             db.add(
                 models.TechnicalErrorLog(
                     service_name="api",
                     error_type=e.__class__.__name__,
-                    error_message=str(e)[:8000],
+                    error_message=f"[rid={rid}] {request.method} {request.url.path} :: {str(e)}"[:8000],
                     telegram_user_id=None,
                     candidate_id=None,
                     state=None,
@@ -191,6 +206,15 @@ async def security_headers_middleware(request: Request, call_next):
         is_https = (request.url.scheme == "https") if request.url else False
     except Exception:
         is_https = False
+
+    # Behind reverse proxy, we may need to trust forwarded proto.
+    try:
+        if not is_https and _env_truthy("TRUST_PROXY"):
+            xfproto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+            if xfproto == "https":
+                is_https = True
+    except Exception:
+        pass
     if APP_ENV in {"production", "prod"} and (is_https or (os.getenv("FORCE_HTTPS") or "").strip() in {"1", "true", "yes", "on"}):
         if "strict-transport-security" not in response.headers:
             response.headers["Strict-Transport-Security"] = "max-age=15552000; includeSubDomains"
