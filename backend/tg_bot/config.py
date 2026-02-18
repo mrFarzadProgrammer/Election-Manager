@@ -11,7 +11,19 @@ try:
 except Exception:
     pass
 
-FAILED_BOT_COOLDOWN = timedelta(minutes=5)
+# Cooldown before retrying a failed bot.
+# این مقدار تعیین می‌کند وقتی به‌دلیل خطای شبکه (مثل قطع VPN) بات متوقف شد،
+# بعد از چند ثانیه دوباره برای استارت تلاش شود.
+_FAILED_BOT_COOLDOWN_SECONDS_RAW = (os.getenv("FAILED_BOT_COOLDOWN_SECONDS") or "60").strip() or "60"
+try:
+    FAILED_BOT_COOLDOWN_SECONDS = int(_FAILED_BOT_COOLDOWN_SECONDS_RAW)
+except ValueError:
+    FAILED_BOT_COOLDOWN_SECONDS = 60
+
+if FAILED_BOT_COOLDOWN_SECONDS < 10:
+    FAILED_BOT_COOLDOWN_SECONDS = 10
+
+FAILED_BOT_COOLDOWN = timedelta(seconds=FAILED_BOT_COOLDOWN_SECONDS)
 
 # Update processing concurrency (python-telegram-bot)
 BOT_CONCURRENT_UPDATES = int((os.getenv("BOT_CONCURRENT_UPDATES") or "64").strip() or "64")

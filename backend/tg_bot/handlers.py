@@ -320,6 +320,8 @@ async def debug_update_logger(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # --- پاسخ تستی و لاگ برای عیب‌یابی ---
+    # (پیام‌های تستی حذف شد و تورفتگی اصلاح شد)
     raw_text = (update.message.text or "")
     text = normalize_button_text(raw_text)
     candidate_id = context.bot_data.get("candidate_id")
@@ -1180,11 +1182,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if btn_eq(text, BTN_COMMITMENTS):
+        from sqlalchemy.orm import joinedload
         def _get_commitments(cid: int):
             db = SessionLocal()
             try:
                 return (
                     db.query(models.BotCommitment)
+                    .options(joinedload(models.BotCommitment.progress_logs))
                     .filter(models.BotCommitment.candidate_id == int(cid))
                     .order_by(models.BotCommitment.created_at.desc())
                     .limit(10)
@@ -1193,27 +1197,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             finally:
                 db.close()
 
+        context.user_data["state"] = STATE_COMMITMENTS_VIEW
         rows = await run_db_query(_get_commitments, candidate_id)
         if not rows:
-            context.user_data["state"] = STATE_COMMITMENTS_VIEW
-            await safe_reply_text(update.message, "📜 تعهدات\n\nفعلاً تعهدی ثبت نشده است.", reply_markup=build_back_keyboard())
+            await safe_reply_text(
+                update.message,
+                "📜 تعهدات نماینده\n\nℹ️ تعهدات نماینده اسنادی رسمی هستند.\nپس از ثبت، متن آن‌ها غیرقابل ویرایش است.\nتنها وضعیت و گزارش پیشرفت به‌روزرسانی می‌شود.\n\n📭 هنوز تعهدی ثبت نشده است.",
+                reply_markup=build_back_keyboard(),
+            )
             return
 
-        blocks: list[str] = []
-        for i, r in enumerate(rows, start=1):
+        # پیام توضیح بالای لیست
+        await safe_reply_text(
+            update.message,
+            "📜 تعهدات نماینده\n\nℹ️ تعهدات نماینده اسنادی رسمی هستند.\nپس از ثبت، متن آن‌ها غیرقابل ویرایش است.\nتنها وضعیت و گزارش پیشرفت به‌روزرسانی می‌شود.",
+            reply_markup=None,
+        )
+
+        for r in rows:
+            # وضعیت
+            status_map = {
+                "completed": ("🟢 انجام شده", "green"),
+                "in_progress": ("🟡 در حال پیگیری", "yellow"),
+                "active": ("🟡 در حال پیگیری", "yellow"),
+                "failed": ("🔴 انجام نشده / متوقف", "red"),
+                "draft": ("⚪️ پیش‌نویس", "gray"),
+            }
+            status_label, _ = status_map.get(getattr(r, "status", "active"), ("🟡 در حال پیگیری", "yellow"))
+            # هدر کارت
+            card = [
+                "📜 تعهد رسمی نماینده",
+                f"وضعیت: {status_label}",
+                "",
+            ]
+            # بدنه کارت
             title = normalize_text(getattr(r, "title", ""))
             body = normalize_text(getattr(r, "body", ""))
-            if not title and not body:
-                continue
-            if len(body) > 500:
-                body = body[:500].rstrip() + "…"
             if title:
-                blocks.append(f"{i}) {title}\n{body}" if body else f"{i}) {title}")
+                card.append(f"عنوان تعهد:\n{title}")
+            if body:
+                card.append(f"شرح تعهد:\n{body}")
+            card.append("")
+            card.append("🔒 این تعهد پس از ثبت، غیرقابل ویرایش است.")
+            card.append("")
+            # متادیتا
+            # تاریخ شمسی (jalali) اگر موجود بود، نمایش بده، وگرنه با تبدیل
+            from .text_utils import to_jalali_date_ymd
+            created_at = getattr(r, "created_at", None)
+            created_at_jalali = getattr(r, "created_at_jalali", None)
+            if created_at_jalali:
+                card.append(f"📅 تاریخ ثبت: {created_at_jalali}")
             else:
-                blocks.append(f"{i}) {body}")
+                card.append(f"📅 تاریخ ثبت: {to_jalali_date_ymd(created_at) if created_at else '---'}")
+            card.append(f"🆔 شناسه تعهد: CM-{r.id:04d}")
 
-        context.user_data["state"] = STATE_COMMITMENTS_VIEW
-        await safe_reply_text(update.message, "📜 تعهدات نماینده\n\n" + "\n\n".join(blocks), reply_markup=build_back_keyboard())
+            # گزارش‌های پیشرفت
+            progress_logs = getattr(r, "progress_logs", [])
+            if progress_logs:
+                card.append("")
+                card.append("🔄 گزارش‌های پیشرفت:")
+                for log in progress_logs:
+                    log_date = to_jalali_date_ymd(log.created_at) if getattr(log, "created_at", None) else "---"
+                    note = normalize_text(getattr(log, "note", ""))
+                    card.append(f"🗓 {log_date}\n{note}")
+
+            await safe_reply_text(update.message, "\n".join(card), reply_markup=None)
+        await safe_reply_text(update.message, "برای بازگشت، دکمه بازگشت را بزنید.", reply_markup=build_back_keyboard())
         return
 
     if state == STATE_ABOUT_MENU:
@@ -1521,6 +1570,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
+
+
+    # ثبت خطا در فایل مجزا و ارسال به تلگرام مدیر
+    try:
+        import os
+        from datetime import datetime
+        from telegram import Bot
+        log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "bot_errors.log")
+        error_time = datetime.now().isoformat()
+        error_text = f"[{error_time}] {repr(context.error)}\n"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(error_text)
+
+        # ارسال پیام به آیدی تلگرام مدیر (جایگزین کنید)
+        ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID") or "96763697"
+        # اگر توکن ربات اصلی دارید، مقداردهی کنید
+        ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN") or None
+        if ADMIN_BOT_TOKEN and ADMIN_TELEGRAM_ID and ADMIN_TELEGRAM_ID != "YOUR_TELEGRAM_ID":
+            try:
+                bot = Bot(token=ADMIN_BOT_TOKEN)
+                bot.send_message(chat_id=ADMIN_TELEGRAM_ID, text=f"❗️ خطای جدید در Election Manager:\n{error_text}")
+            except Exception as notify_err:
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(f"[NOTIFY_FAIL] {notify_err}\n")
+    except Exception:
+        pass
 
     try:
         candidate_id = context.bot_data.get("candidate_id") if hasattr(context, "bot_data") else None
