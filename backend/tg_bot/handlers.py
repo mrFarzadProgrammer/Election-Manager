@@ -1182,11 +1182,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if btn_eq(text, BTN_COMMITMENTS):
+
         from sqlalchemy.orm import joinedload
+        from utils.cache import cache_get_json, cache_set_json
+        import models
+
         def _get_commitments(cid: int):
             db = SessionLocal()
             try:
-                return (
+                rows = (
                     db.query(models.BotCommitment)
                     .options(joinedload(models.BotCommitment.progress_logs))
                     .filter(models.BotCommitment.candidate_id == int(cid))
@@ -1194,11 +1198,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     .limit(10)
                     .all()
                 )
+                # Serialize for cache (only needed fields)
+                result = []
+                for r in rows:
+                    result.append({
+                        "id": r.id,
+                        "title": r.title,
+                        "body": r.body,
+                        "status": r.status,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                        "created_at_jalali": getattr(r, "created_at_jalali", None),
+                        "progress_logs": [
+                            {
+                                "created_at": log.created_at.isoformat() if log.created_at else None,
+                                "note": log.note,
+                            }
+                            for log in getattr(r, "progress_logs", [])
+                        ],
+                    })
+                return result
             finally:
                 db.close()
 
         context.user_data["state"] = STATE_COMMITMENTS_VIEW
-        rows = await run_db_query(_get_commitments, candidate_id)
+        cache_key = f"commitments:{candidate_id}"
+        rows = cache_get_json(cache_key)
+        if rows is None:
+            # Not cached, fetch and cache
+            rows = await run_db_query(_get_commitments, candidate_id)
+            cache_set_json(cache_key, rows, 60)  # Cache for 60 seconds
+
         if not rows:
             await safe_reply_text(
                 update.message,
@@ -1223,7 +1252,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "failed": ("🔴 انجام نشده / متوقف", "red"),
                 "draft": ("⚪️ پیش‌نویس", "gray"),
             }
-            status_label, _ = status_map.get(getattr(r, "status", "active"), ("🟡 در حال پیگیری", "yellow"))
+            status_label, _ = status_map.get(r.get("status", "active"), ("🟡 در حال پیگیری", "yellow"))
             # هدر کارت
             card = [
                 "📜 تعهد رسمی نماینده",
@@ -1231,8 +1260,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "",
             ]
             # بدنه کارت
-            title = normalize_text(getattr(r, "title", ""))
-            body = normalize_text(getattr(r, "body", ""))
+            title = normalize_text(r.get("title", ""))
+            body = normalize_text(r.get("body", ""))
             if title:
                 card.append(f"عنوان تعهد:\n{title}")
             if body:
@@ -1241,24 +1270,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             card.append("🔒 این تعهد پس از ثبت، غیرقابل ویرایش است.")
             card.append("")
             # متادیتا
-            # تاریخ شمسی (jalali) اگر موجود بود، نمایش بده، وگرنه با تبدیل
             from .text_utils import to_jalali_date_ymd
-            created_at = getattr(r, "created_at", None)
-            created_at_jalali = getattr(r, "created_at_jalali", None)
+            created_at_jalali = r.get("created_at_jalali")
+            created_at = r.get("created_at")
+            import datetime
+            dt = None
+            if created_at:
+                try:
+                    dt = datetime.datetime.fromisoformat(created_at)
+                except Exception:
+                    dt = None
             if created_at_jalali:
                 card.append(f"📅 تاریخ ثبت: {created_at_jalali}")
             else:
-                card.append(f"📅 تاریخ ثبت: {to_jalali_date_ymd(created_at) if created_at else '---'}")
-            card.append(f"🆔 شناسه تعهد: CM-{r.id:04d}")
+                card.append(f"📅 تاریخ ثبت: {to_jalali_date_ymd(dt) if dt else '---'}")
+            card.append(f"🆔 شناسه تعهد: CM-{r.get('id', 0):04d}")
 
             # گزارش‌های پیشرفت
-            progress_logs = getattr(r, "progress_logs", [])
+            progress_logs = r.get("progress_logs", [])
             if progress_logs:
                 card.append("")
                 card.append("🔄 گزارش‌های پیشرفت:")
                 for log in progress_logs:
-                    log_date = to_jalali_date_ymd(log.created_at) if getattr(log, "created_at", None) else "---"
-                    note = normalize_text(getattr(log, "note", ""))
+                    log_dt = None
+                    if log.get("created_at"):
+                        try:
+                            log_dt = datetime.datetime.fromisoformat(log["created_at"])
+                        except Exception:
+                            log_dt = None
+                    log_date = to_jalali_date_ymd(log_dt) if log_dt else "---"
+                    note = normalize_text(log.get("note", ""))
                     card.append(f"🗓 {log_date}\n{note}")
 
             await safe_reply_text(update.message, "\n".join(card), reply_markup=None)
