@@ -18,8 +18,11 @@ def main() -> None:
     while True:
         try:
             asyncio.run(runner_main())
-        except Exception as e:
-            logging.exception("Bot crashed, will restart in 30 seconds: %s", e)
+        except KeyboardInterrupt:
+            logging.info("Bot stopped by user (KeyboardInterrupt). Exiting...")
+            break
+        except BaseException as e:
+            logging.exception("Bot crashed (BaseException), will restart in 30 seconds: %s", e)
             time.sleep(30)
 
 
