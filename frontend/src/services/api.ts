@@ -43,18 +43,18 @@ export const API_BASE =
         }
 
         // Safe default for local dev. If the UI is opened via a LAN hostname/IP,
-        // point API calls to the same host on port 8000.
+        // point API calls to the same host on port 8002.
         try {
             if (typeof window !== "undefined" && window.location?.hostname) {
                 const host = String(window.location.hostname || "").trim();
                 if (host && host !== "localhost" && host !== "127.0.0.1") {
-                    return `http://${host}:8000`;
+                    return `http://${host}:8002`;
                 }
             }
         } catch {
             // ignore
         }
-        return "http://127.0.0.1:8000";
+        return "http://127.0.0.1:8002";
     })();
 
 // Security posture: prefer HttpOnly cookie sessions.
@@ -108,7 +108,7 @@ const normalizeAbsoluteUrl = (url: any): any => {
     const trimmed = url.trim();
     if (!trimmed) return url;
 
-    const knownBases = ["http://localhost:8000", "http://127.0.0.1:8000"];
+    const knownBases = ["http://localhost:8002", "http://127.0.0.1:8002"];
     for (const base of knownBases) {
         if (trimmed.startsWith(base + "/")) {
             return API_BASE.replace(/\/$/, "") + trimmed.slice(base.length);

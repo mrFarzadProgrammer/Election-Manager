@@ -85,7 +85,7 @@ const SupportChat: React.FC<SupportChatProps> = ({ tickets, onCreateTicket, onRe
     const getFullUrl = (url?: string) => {
         if (!url) return undefined;
         if (url.startsWith('http')) return url;
-        const baseUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+        const baseUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:8002";
         return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
     };
 

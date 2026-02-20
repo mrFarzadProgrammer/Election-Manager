@@ -25,6 +25,29 @@ running_bots: dict[int, Application] = {}
 failed_bots: dict[int, datetime] = {}
 
 
+def _telegram_httpx_kwargs() -> dict:
+    """Build httpx client kwargs for Telegram API calls.
+
+    Default is direct connection (trust_env=False) unless the user explicitly
+    opts into proxy/env behavior.
+
+    - If TELEGRAM_PROXY_URL is set, it is used explicitly (supports socks5/http).
+    - Else, TELEGRAM_TRUST_ENV=1 enables inheriting proxy env vars.
+    """
+
+    explicit_proxy_url = (os.getenv("TELEGRAM_PROXY_URL") or "").strip()
+    if explicit_proxy_url:
+        return {"trust_env": False, "proxy": explicit_proxy_url}
+
+    # If user explicitly sets TELEGRAM_TRUST_ENV (even to 0/false), honor it.
+    env_val = os.getenv("TELEGRAM_TRUST_ENV")
+    if env_val is not None:
+        return {"trust_env": env_truthy("TELEGRAM_TRUST_ENV")}
+
+    # Otherwise auto-detect: if direct connection works, avoid env proxies.
+    return {"trust_env": auto_decide_trust_env_for_telegram()}
+
+
 async def run_bot(candidate: User):
     from .handlers import chatid_command, debug_update_logger, error_handler, handle_message, myid_command, start_command
 
@@ -64,7 +87,7 @@ async def run_bot(candidate: User):
                 write_timeout=20,
                 connect_timeout=20,
                 pool_timeout=5,
-                httpx_kwargs={"trust_env": True},
+                httpx_kwargs=_telegram_httpx_kwargs(),
             )
             request = HTTPXRequest(**request_kwargs)
 
@@ -171,7 +194,7 @@ async def run_bot(candidate: User):
             write_timeout=20,
             connect_timeout=20,
             pool_timeout=5,
-            httpx_kwargs={"trust_env": True},
+            httpx_kwargs=_telegram_httpx_kwargs(),
         )
         request = HTTPXRequest(**request_kwargs)
 

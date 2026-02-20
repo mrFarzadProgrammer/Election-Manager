@@ -15,11 +15,11 @@ export default defineConfig({
     allowedHosts: 'all', // ✅ THIS IS THE KEY ✅
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:8002',
         changeOrigin: true,
       },
       '/uploads': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:8002',
         changeOrigin: true,
       },
     },
