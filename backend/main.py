@@ -4,11 +4,14 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response as StarletteResponse
+from starlette.types import Scope
 
 import database
 import models
@@ -36,6 +39,49 @@ logger = logging.getLogger(__name__)
 
 def _env_truthy(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _frontend_dist_dir() -> Path | None:
+    raw = (os.getenv("FRONTEND_DIST_DIR") or "").strip()
+    if raw:
+        try:
+            p = Path(raw).expanduser().resolve()
+            return p if p.is_dir() else None
+        except Exception:
+            return None
+
+    # Default: repo_root/frontend/dist
+    try:
+        repo_root = Path(__file__).resolve().parent.parent
+        p = (repo_root / "frontend" / "dist").resolve()
+        return p if p.is_dir() else None
+    except Exception:
+        return None
+
+
+_FRONTEND_DIST_DIR = None
+if _env_truthy("SERVE_FRONTEND") or APP_ENV in {"production", "prod"}:
+    _FRONTEND_DIST_DIR = _frontend_dist_dir()
+
+SERVE_FRONTEND = _FRONTEND_DIST_DIR is not None
+
+
+class SpaStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: Scope) -> StarletteResponse:
+        response = await super().get_response(path, scope)
+        if response.status_code != 404:
+            return response
+
+        # SPA fallback: unknown routes should serve index.html.
+        # Keep API/static mounts untouched.
+        try:
+            request_path = (scope.get("path") or "").strip()
+        except Exception:
+            request_path = ""
+        if request_path.startswith("/api") or request_path.startswith("/uploads"):
+            return response
+
+        return await super().get_response("index.html", scope)
 
 
 @asynccontextmanager
@@ -169,6 +215,12 @@ else:
         "http://localhost:5555",
         "http://127.0.0.1:5555",
     ]
+    _extra_dev_origins = [
+        o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()
+    ]
+    for _o in _extra_dev_origins:
+        if _o not in _cors_allow_origins:
+            _cors_allow_origins.append(_o)
     _cors_allow_origin_regex = r"^http://(localhost|127\\.0\\.0\\.1):5\\d{3}$"
 
 app.add_middleware(
@@ -230,7 +282,25 @@ async def security_headers_middleware(request: Request, call_next):
         and not path.startswith("/redoc")
         and not path.startswith("/openapi.json")
     ):
-        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+        is_api_like = (
+            path.startswith("/api")
+            or path.startswith("/uploads")
+        )
+        if SERVE_FRONTEND and not is_api_like:
+            # Frontend needs scripts/styles; keep it same-origin and deny framing.
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self'; "
+                "img-src 'self' data: blob:; "
+                "font-src 'self' data:; "
+                "connect-src 'self'; "
+                "object-src 'none'; "
+                "base-uri 'self'; "
+                "frame-ancestors 'none'"
+            )
+        else:
+            response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
     return response
 
 
@@ -281,6 +351,15 @@ app.include_router(admin_router.router)
 app.include_router(admin_mvp_router.router)
 app.include_router(monitoring_router.router)
 app.include_router(misc_router.router)
+
+
+if SERVE_FRONTEND:
+    # Mount AFTER API routes so /api keeps working.
+    app.mount(
+        "/",
+        SpaStaticFiles(directory=str(_FRONTEND_DIST_DIR), html=True),
+        name="frontend",
+    )
 
 
 if __name__ == "__main__":

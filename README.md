@@ -13,6 +13,11 @@ Full-stack election/voting management system.
 2. Install deps: `pip install -r backend/requirements.txt`
 3. Run: `python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000` (from `backend/`)
 
+### Telegram Bot Runner
+Run the polling bot runner (from `backend/`):
+
+`python bot_runner.py`
+
 ### Frontend
 1. Install deps: `npm install` (from `frontend/`)
 2. Run dev server: `npm run dev`
@@ -20,6 +25,12 @@ Full-stack election/voting management system.
 Frontend: http://127.0.0.1:5173
 Backend: http://127.0.0.1:8000
 Swagger: http://127.0.0.1:8000/docs
+
+## Share on the Internet (Quick Testing)
+
+For a step-by-step guide (Windows-friendly) to run the panel + bot and share a public URL via Cloudflare Tunnel or ngrok, see:
+
+- [RUN_PUBLIC.md](RUN_PUBLIC.md)
 
 ## Production Notes (Security)
 

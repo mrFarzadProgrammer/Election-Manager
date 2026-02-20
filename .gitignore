@@ -49,3 +49,9 @@ cleanup_log.txt
 backend/uploads/
 backend/uploads_private/
 backend/_tmp_exports/
+
+# --- Backend dev/staging tools (do not ship/commit) ---
+backend/devtools/
+
+# --- Local logs ---
+logs/
