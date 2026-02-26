@@ -89,6 +89,7 @@ const BotRequestsTab: React.FC = () => {
                             <th className='p-4 text-right'>یوزرنیم</th>
                             <th className='p-4 text-right'>وضعیت</th>
                             <th className='p-4 text-right'>متن</th>
+                            <th className='p-4 text-right'>عملیات</th>
                         </tr>
                     </thead>
                     <tbody className='divide-y'>
@@ -98,7 +99,29 @@ const BotRequestsTab: React.FC = () => {
                                 <td className='p-4 whitespace-nowrap'>{it.role || '-'}</td>
                                 <td className='p-4 whitespace-nowrap'>{it.constituency || '-'}</td>
                                 <td className='p-4 whitespace-nowrap dir-ltr text-right'>{it.requester_contact || '-'}</td>
-                                <td className='p-4 whitespace-nowrap dir-ltr text-right'>{it.telegram_username ? `@${it.telegram_username}` : '-'}</td>
+                                <td className='p-4 whitespace-nowrap dir-ltr text-right'>
+                                    {it.telegram_username ? (
+                                        <a
+                                            href={`https://t.me/${String(it.telegram_username).replace(/^@/, '')}`}
+                                            target='_blank'
+                                            rel='noreferrer'
+                                            className='text-blue-600 hover:underline'
+                                            title='باز کردن در تلگرام'
+                                        >
+                                            @{String(it.telegram_username).replace(/^@/, '')}
+                                        </a>
+                                    ) : it.telegram_user_id ? (
+                                        <a
+                                            href={`tg://user?id=${encodeURIComponent(String(it.telegram_user_id))}`}
+                                            className='text-blue-600 hover:underline'
+                                            title='باز کردن در تلگرام'
+                                        >
+                                            {String(it.telegram_user_id)}
+                                        </a>
+                                    ) : (
+                                        '-'
+                                    )}
+                                </td>
                                 <td className='p-4 whitespace-nowrap'>
                                     <select
                                         value={String(it.status || '')}
@@ -112,12 +135,31 @@ const BotRequestsTab: React.FC = () => {
                                     <div className='text-[11px] text-gray-500 mt-1'>{statusLabel(it.status)}</div>
                                 </td>
                                 <td className='p-4 text-gray-700 text-sm whitespace-pre-wrap min-w-[280px]'>{it.text || '-'}</td>
+                                <td className='p-4 whitespace-nowrap'>
+                                    <button
+                                        onClick={async () => {
+                                            const ok = window.confirm('این رکورد حذف شود؟');
+                                            if (!ok) return;
+                                            const token = getToken();
+                                            try {
+                                                await api.deleteBotRequest(it.id, token);
+                                                setItems(prev => prev.filter(x => x.id !== it.id));
+                                            } catch (e: any) {
+                                                console.error(e);
+                                                alert(e?.message || 'خطا در حذف رکورد');
+                                            }
+                                        }}
+                                        className='px-3 py-2 rounded-xl bg-red-600 text-white text-xs font-bold'
+                                    >
+                                        حذف
+                                    </button>
+                                </td>
                             </tr>
                         ))}
 
                         {!items.length && (
                             <tr>
-                                <td className='p-6 text-center text-gray-400' colSpan={7}>
+                                <td className='p-6 text-center text-gray-400' colSpan={8}>
                                     موردی یافت نشد.
                                 </td>
                             </tr>

@@ -11,7 +11,7 @@ import models
 import schemas
 
 from ._common import client_ip
-from ._telegram_notify import notify_question_answer_published
+from ._telegram_notify import notify_feedback_answer_published, notify_question_answer_published
 
 
 router = APIRouter(tags=["candidate-mvp"])
@@ -29,10 +29,13 @@ def _require_candidate(current_user: models.User) -> None:
 
 @router.get("/api/candidates/me/feedback", response_model=list[schemas.FeedbackSubmission])
 def get_my_feedback_submissions(
+    limit: int = 10,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
     _require_candidate(current_user)
+    if limit < 1 or limit > 50:
+        raise HTTPException(status_code=422, detail={"message": "limit must be between 1 and 50"})
     return (
         db.query(models.BotSubmission)
         .filter(
@@ -40,6 +43,7 @@ def get_my_feedback_submissions(
             models.BotSubmission.type == "FEEDBACK",
         )
         .order_by(models.BotSubmission.id.desc())
+        .limit(int(limit))
         .all()
     )
 
@@ -90,6 +94,77 @@ def update_my_feedback_submission(
     return submission
 
 
+@router.delete("/api/candidates/me/feedback/{submission_id}")
+def delete_my_feedback_submission(
+    submission_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+
+    submission = (
+        db.query(models.BotSubmission)
+        .filter(
+            models.BotSubmission.id == submission_id,
+            models.BotSubmission.candidate_id == current_user.id,
+            models.BotSubmission.type == "FEEDBACK",
+        )
+        .first()
+    )
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    db.delete(submission)
+    db.commit()
+    return {"ok": True}
+
+
+@router.put(
+    "/api/candidates/me/feedback/{submission_id}/answer",
+    response_model=schemas.FeedbackSubmission,
+)
+def answer_my_feedback_submission(
+    submission_id: int,
+    payload: schemas.FeedbackSubmissionAnswer,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    _require_candidate(current_user)
+
+    submission = (
+        db.query(models.BotSubmission)
+        .filter(
+            models.BotSubmission.id == submission_id,
+            models.BotSubmission.candidate_id == current_user.id,
+            models.BotSubmission.type == "FEEDBACK",
+        )
+        .first()
+    )
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    if (submission.status or "").upper() == "ANSWERED":
+        raise HTTPException(status_code=409, detail={"message": "Answer is immutable"})
+
+    answer_text = (payload.answer_text or "").strip()
+    if not answer_text:
+        raise HTTPException(status_code=422, detail={"message": "answer_text is required"})
+    if len(answer_text) > 2000:
+        raise HTTPException(status_code=422, detail={"message": "answer_text is too long"})
+
+    submission.answer = answer_text
+    submission.status = "ANSWERED"
+    submission.is_public = True
+    submission.answered_at = datetime.utcnow()
+
+    db.add(submission)
+    db.commit()
+    db.refresh(submission)
+
+    notify_feedback_answer_published(candidate=current_user, submission=submission)
+    return submission
+
+
 @router.get("/api/candidates/me/feedback/stats", response_model=schemas.FeedbackStatsResponse)
 def get_my_feedback_stats(
     days: int = 7,
@@ -115,7 +190,8 @@ def get_my_feedback_stats(
     total = len(rows)
     counts: dict[str, int] = {}
     for r in rows:
-        tag = (r.tag or "").strip() or "سایر"
+        # Note: "سایر" should be an explicit tag choice, not the implicit default.
+        tag = (r.tag or "").strip() or "بدون تگ"
         counts[tag] = counts.get(tag, 0) + 1
 
     items = []

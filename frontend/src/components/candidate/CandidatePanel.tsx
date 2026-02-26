@@ -43,6 +43,9 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
     const [announcements, setAnnouncements] = useState<Announcement[]>([]);
     const [isUploading, setIsUploading] = useState(false);
     const [panelModal, setPanelModal] = useState<null | { variant: 'info' | 'warning' | 'error' | 'success'; title: string; message: string }>(null);
+
+    // Keep locked tabs in code for later enable, but hide them from the menu for now.
+    const showLockedMenuItems = false;
     const [readTicketTimes, setReadTicketTimes] = useState<{ [key: string]: number }>(() => {
         const saved = localStorage.getItem('read_ticket_times');
         if (!saved) return {};
@@ -143,67 +146,64 @@ const CandidatePanel: React.FC<CandidatePanelProps> = ({ candidate, onUpdate, pl
                         <button onClick={() => trySetTab('PUBLIC_MESSAGES')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PUBLIC_MESSAGES' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Users size={20} /> نظرات و دغدغه‌ها</button>
                         <button onClick={() => trySetTab('PUBLIC_QUESTIONS')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl ${activeTab === 'PUBLIC_QUESTIONS' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><HelpCircle size={20} /> سؤال‌های مردمی</button>
 
-                        <div className='pt-3 border-t border-gray-100' />
+                        {showLockedMenuItems && (
+                            <>
+                                <div className='pt-3 border-t border-gray-100' />
 
-                        <button
-                            onClick={() => trySetTab('BOT_SETTINGS')}
-                            disabled
-                            className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
-                            title='این بخش در نسخه فعلی قفل است'
-                        >
-                            <span className='flex items-center gap-3'><Settings size={20} /> تنظیمات بات</span>
-                            <Lock size={16} />
-                        </button>
+                                <button
+                                    onClick={() => trySetTab('BOT_SETTINGS')}
+                                    disabled
+                                    className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
+                                    title='این بخش در نسخه فعلی قفل است'
+                                >
+                                    <span className='flex items-center gap-3'><Settings size={20} /> تنظیمات بات</span>
+                                    <Lock size={16} />
+                                </button>
 
-                        <button
-                            onClick={() => trySetTab('PLANS')}
-                            disabled
-                            className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
-                            title='این بخش در نسخه فعلی قفل است'
-                        >
-                            <span className='flex items-center gap-3'><CreditCard size={20} /> لیست پلن‌ها</span>
-                            <Lock size={16} />
-                        </button>
+                                <button
+                                    onClick={() => trySetTab('PLANS')}
+                                    disabled
+                                    className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
+                                    title='این بخش در نسخه فعلی قفل است'
+                                >
+                                    <span className='flex items-center gap-3'><CreditCard size={20} /> لیست پلن‌ها</span>
+                                    <Lock size={16} />
+                                </button>
 
-                        <button
-                            onClick={() => trySetTab('TICKETS')}
-                            disabled
-                            className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
-                            title='این بخش در نسخه فعلی قفل است'
-                        >
-                            <span className='flex items-center gap-3'>
-                                <span className="relative">
-                                    <MessageSquare size={20} />
-                                    {unreadCount > 0 && (
-                                        <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full">
-                                            {unreadCount}
+                                <button
+                                    onClick={() => trySetTab('TICKETS')}
+                                    disabled
+                                    className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
+                                    title='این بخش در نسخه فعلی قفل است'
+                                >
+                                    <span className='flex items-center gap-3'>
+                                        <span className="relative">
+                                            <MessageSquare size={20} />
+                                            {unreadCount > 0 && (
+                                                <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full">
+                                                    {unreadCount}
+                                                </span>
+                                            )}
                                         </span>
-                                    )}
-                                </span>
-                                پشتیبانی
-                            </span>
-                            <Lock size={16} />
-                        </button>
+                                        پشتیبانی
+                                    </span>
+                                    <Lock size={16} />
+                                </button>
 
-                        <button
-                            onClick={() => trySetTab('NOTIFICATIONS')}
-                            disabled
-                            className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
-                            title='این بخش در نسخه فعلی قفل است'
-                        >
-                            <span className='flex items-center gap-3'><Bell size={20} /> اطلاعیه‌ها</span>
-                            <Lock size={16} />
-                        </button>
+                                <button
+                                    onClick={() => trySetTab('NOTIFICATIONS')}
+                                    disabled
+                                    className='w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-gray-400 bg-gray-50 cursor-not-allowed'
+                                    title='این بخش در نسخه فعلی قفل است'
+                                >
+                                    <span className='flex items-center gap-3'><Bell size={20} /> اطلاعیه‌ها</span>
+                                    <Lock size={16} />
+                                </button>
+                            </>
+                        )}
                     </nav>
-                    <div className="px-4 mb-4 mt-auto">
-                        <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
-                            <div className="flex items-center justify-between mb-2">
-                                <span className="text-xs font-bold text-blue-800">پلن فعال: پایه</span>
-                            </div>
-                            <div className="text-[10px] text-blue-600">
-                                اعتبار: ۳۹ روز
-                            </div>
-                        </div>
+                    <div className="p-4 mt-auto text-center border-t border-gray-100">
+                        <p className="text-xs font-medium text-gray-400">نسخه ۱.۰.۰</p>
                     </div>
                 </div>
             </aside>

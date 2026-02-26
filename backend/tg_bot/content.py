@@ -1,7 +1,6 @@
-import json
 import os
 
-from .text_utils import normalize_text
+from .text_utils import json_loads_loose, normalize_text
 
 
 def _coerce_bot_config(candidate: dict) -> dict:
@@ -14,11 +13,8 @@ def _coerce_bot_config(candidate: dict) -> dict:
         s = raw.strip()
         if not s:
             return {}
-        try:
-            parsed = json.loads(s)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            return {}
+        parsed = json_loads_loose(s)
+        return parsed if isinstance(parsed, dict) else {}
     return {}
 
 

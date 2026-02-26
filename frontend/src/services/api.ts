@@ -25,37 +25,25 @@ import {
     FlowDropItem,
 } from "../types";
 
-const VITE_API_BASE =
-    (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-    undefined;
+const API_BASE = import.meta.env.VITE_API_BASE || "";
 
-export const API_BASE =
-    VITE_API_BASE ||
-    (typeof process !== "undefined" && (process as any).env?.REACT_APP_API_BASE_URL) ||
-    (() => {
-        // In Vite dev, prefer same-origin requests and rely on Vite proxy (/api, /uploads).
+
+const toRequestUrl = (path: string): string => {
+    // Always prefer same-origin relative paths so the app works behind a reverse proxy (e.g. Nginx: /api -> backend).
+    if (/^https?:\/\//i.test(path)) {
         try {
-            if (typeof import.meta !== "undefined" && (import.meta as any).env?.DEV) {
-                return "";
+            const u = new URL(path);
+            const origin = typeof window !== "undefined" ? window.location?.origin : "";
+            if (origin && u.origin === origin) {
+                return `${u.pathname}${u.search}${u.hash}`;
             }
         } catch {
             // ignore
         }
-
-        // Safe default for local dev. If the UI is opened via a LAN hostname/IP,
-        // point API calls to the same host on port 8002.
-        try {
-            if (typeof window !== "undefined" && window.location?.hostname) {
-                const host = String(window.location.hostname || "").trim();
-                if (host && host !== "localhost" && host !== "127.0.0.1") {
-                    return `http://${host}:8002`;
-                }
-            }
-        } catch {
-            // ignore
-        }
-        return "http://127.0.0.1:8002";
-    })();
+        throw new Error("Absolute API URLs are not allowed. Use a relative path like /api/...");
+    }
+    return path.startsWith("/") ? path : `/${path}`;
+};
 
 // Security posture: prefer HttpOnly cookie sessions.
 // Legacy token storage (localStorage) increases XSS impact; keep it dev-only by default.
@@ -108,12 +96,19 @@ const normalizeAbsoluteUrl = (url: any): any => {
     const trimmed = url.trim();
     if (!trimmed) return url;
 
-    const knownBases = ["http://localhost:8002", "http://127.0.0.1:8002"];
-    for (const base of knownBases) {
-        if (trimmed.startsWith(base + "/")) {
-            return API_BASE.replace(/\/$/, "") + trimmed.slice(base.length);
+    // If backend accidentally returns absolute dev URLs, normalize them to same-origin relative URLs.
+    // Keep this logic generic (no hardcoded ports) so it doesn't leak environment-specific bases.
+    if (/^https?:\/\//i.test(trimmed)) {
+        try {
+            const u = new URL(trimmed);
+            if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+                return `${u.pathname}${u.search}${u.hash}`;
+            }
+        } catch {
+            // ignore
         }
     }
+
     return url;
 };
 
@@ -142,10 +137,31 @@ const repairSuspiciousJsonBackslashes = (text: string): string => {
     // Heuristic repair for a common invalid-JSON pattern on Windows:
     // JSON contains a string with an unescaped backslash like "C:\Users\..." but serialized as "C:\Users" (single backslashes).
     // Any backslash not starting a valid JSON escape sequence must be escaped.
-    return text.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+    // Special case: "\u" is only valid if followed by 4 hex digits. Paths like "\uploads" would otherwise throw
+    // "Bad Unicode escape" during JSON.parse.
+    const fixedUnicode = text.replace(/\\u(?![0-9a-fA-F]{4})/g, "\\\\u");
+    return fixedUnicode.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+};
+
+const repairJsonBackslashesAggressive = (text: string): string => {
+    // Last-resort repair: escape any single backslash that isn't already escaped.
+    // This is useful when a server returns invalid JSON with Windows-style paths like:
+    //   {"path":"C:\Users\..."}
+    // or relative paths like:
+    //   {"url":"\uploads\file.jpg"}
+    // which otherwise trigger SyntaxError: "Bad Unicode escape in JSON...".
+    //
+    // Note: This is intentionally aggressive and may change semantics of sequences like "\n"
+    // into a literal backslash-n, but it is only used as a fallback when parsing already failed.
+    if (!text) return text;
+    return text.replace(/\\(?!\\)/g, "\\\\");
 };
 
 const parseJsonTextSafely = (text: string): any => {
+    // Returns:
+    // - parsed JSON value (can be null/false/0/object/array/string)
+    // - null for empty body
+    // - undefined when parsing fails (so callers can fall back to raw text)
     if (!text) return null;
     try {
         return JSON.parse(text);
@@ -153,7 +169,11 @@ const parseJsonTextSafely = (text: string): any => {
         try {
             return JSON.parse(repairSuspiciousJsonBackslashes(text));
         } catch {
-            return null;
+            try {
+                return JSON.parse(repairJsonBackslashesAggressive(text));
+            } catch {
+                return undefined;
+            }
         }
     }
 };
@@ -162,7 +182,7 @@ const readBodySafely = async (res: Response) => {
     const text = await res.text();
     if (!text) return null;
     const parsed = parseJsonTextSafely(text);
-    return parsed ?? { detail: text };
+    return parsed === undefined ? { detail: text } : parsed;
 };
 
 type RefreshResponse = {
@@ -244,16 +264,16 @@ const maybeAttachCsrfHeader = (headers: Headers, method: string) => {
 const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
     try {
         // Prefer cookie-based refresh (HttpOnly refresh_token cookie).
-        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+        const res = await fetch(toRequestUrl("/api/auth/refresh"), {
             method: "POST",
             credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            // Important: do NOT send an empty JSON body here.
+            // Backend uses `Body(None)` and will treat `{}` as an invalid RefreshRequest (422).
         });
 
         if (res.ok) {
             const text = await res.text();
-            const data = (parseJsonTextSafely(text) || null) as RefreshResponse | null;
+            const data = (parseJsonTextSafely(text) ?? null) as RefreshResponse | null;
             if (data?.access_token) {
                 // Legacy compatibility: if the app is still using localStorage tokens, keep them updated.
                 if (LEGACY_TOKEN_STORAGE_ENABLED && localStorage.getItem("refresh_token")) {
@@ -272,7 +292,7 @@ const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
     const refreshToken = localStorage.getItem("refresh_token");
     if (!refreshToken) return null;
     try {
-        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+        const res = await fetch(toRequestUrl("/api/auth/refresh"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ refresh_token: refreshToken }),
@@ -280,7 +300,7 @@ const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
 
         if (!res.ok) return null;
         const text = await res.text();
-        const data = (parseJsonTextSafely(text) || null) as RefreshResponse | null;
+        const data = (parseJsonTextSafely(text) ?? null) as RefreshResponse | null;
         if (!data?.access_token) return null;
 
         localStorage.setItem("access_token", data.access_token);
@@ -292,7 +312,7 @@ const refreshAccessToken = async (): Promise<RefreshResponse | null> => {
 };
 
 async function request<T>(path: string, options: RequestInit = {}, _retried: boolean = false): Promise<T> {
-    const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
+    const url = toRequestUrl(path);
 
     const normalizedHeaders = normalizeRequestHeaders(options.headers);
     const headers = new Headers(normalizedHeaders as any);
@@ -331,7 +351,7 @@ async function request<T>(path: string, options: RequestInit = {}, _retried: boo
             }
         })();
         throw new Error(
-            `ارتباط با سرور برقرار نشد. لطفاً اتصال یا اجرای سرور را بررسی کنید. (API: ${API_BASE}${origin ? ` | Origin: ${origin}` : ""}${reason})`
+            `ارتباط با سرور برقرار نشد. لطفاً اتصال یا اجرای سرور را بررسی کنید. (${origin ? `Origin: ${origin} | ` : ""}URL: ${url}${reason})`
         );
     }
 
@@ -370,13 +390,13 @@ async function request<T>(path: string, options: RequestInit = {}, _retried: boo
         const text = await res.text();
         const parsed = parseJsonTextSafely(text);
         // If parsing fails, fall back to raw text instead of throwing a SyntaxError.
-        return (parsed ?? (text as any)) as T;
+        return ((parsed === undefined ? (text as any) : parsed) as T);
     }
     return (await res.text()) as unknown as T;
 }
 
 async function requestBlob(path: string, options: RequestInit = {}, _retried: boolean = false): Promise<Blob> {
-    const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
+    const url = toRequestUrl(path);
 
     const normalizedHeaders = normalizeRequestHeaders(options.headers);
     const headers = new Headers(normalizedHeaders as any);
@@ -494,8 +514,11 @@ const mapFeedbackSubmission = (s: any): FeedbackSubmission => ({
     text: String(s.text ?? ''),
     created_at: normalizeIsoUtcString(s.created_at),
     constituency: typeof s.constituency === 'string' ? s.constituency : undefined,
-    status: (s.status || 'NEW'),
+    status: (String(s.status || 'NEW').toUpperCase() as any),
     tag: s.tag ?? null,
+    answer: s.answer ?? null,
+    answered_at: s.answered_at ? normalizeIsoUtcString(s.answered_at) : null,
+    is_public: Boolean(s.is_public ?? false),
 });
 
 const mapQuestionSubmission = (s: any): QuestionSubmission => ({
@@ -888,6 +911,15 @@ export const api = {
         return mapBotRequestSubmission(data);
     },
 
+    deleteBotRequest: async (id: string, token: string): Promise<void> => {
+        await request<void>(`/api/admin/bot-requests/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+        });
+    },
+
     // ========== Candidates ==========
     getCandidate: async (id: number, token?: string): Promise<Candidate> => {
         const headers: any = { "Content-Type": "application/json" };
@@ -903,8 +935,8 @@ export const api = {
     },
 
     // ========== Feedback Submissions (Candidate MVP) ==========
-    getMyFeedbackSubmissions: async (token: string): Promise<FeedbackSubmission[]> => {
-        const data = await request<any[]>(`/api/candidates/me/feedback`, {
+    getMyFeedbackSubmissions: async (token: string, limit: number = 10): Promise<FeedbackSubmission[]> => {
+        const data = await request<any[]>(`/api/candidates/me/feedback?limit=${encodeURIComponent(String(limit))}`, {
             method: "GET",
             headers: {
                 "Content-Type": "application/json",
@@ -928,6 +960,31 @@ export const api = {
             body: JSON.stringify(patch),
         });
         return mapFeedbackSubmission(data);
+    },
+
+    answerMyFeedbackSubmission: async (
+        token: string,
+        submissionId: string,
+        answer_text: string,
+    ): Promise<FeedbackSubmission> => {
+        const data = await request<any>(`/api/candidates/me/feedback/${encodeURIComponent(String(submissionId))}/answer`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ answer_text }),
+        });
+        return mapFeedbackSubmission(data);
+    },
+
+    deleteMyFeedbackSubmission: async (token: string, submissionId: string): Promise<void> => {
+        await request<void>(`/api/candidates/me/feedback/${encodeURIComponent(String(submissionId))}`, {
+            method: "DELETE",
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+        });
     },
 
     getMyFeedbackStats: async (token: string, days: 7 | 30): Promise<FeedbackStatsResponse> => {

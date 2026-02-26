@@ -214,7 +214,6 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
                                 <th className="px-6 py-4 text-right">اطلاعات بات</th>
                                 <th className="px-6 py-4 text-right">معرفی صوتی</th>
                                 <th className="px-6 py-4 text-right">موقعیت</th>
-                                <th className="px-6 py-4 text-right">پلن فعال</th>
                                 <th className="px-6 py-4 text-center">وضعیت</th>
                                 <th className="px-6 py-4 text-center">عملیات</th>
                             </tr>
@@ -288,22 +287,8 @@ const CandidatesManagement: React.FC<CandidatesManagementProps> = ({
                                         </div>
                                     </td>
 
-                                    {/* Active Plan Column */}
-                                    <td className="px-6 py-4">
-                                        {(() => {
-                                            const activePlan = plans.find(p => p.id === candidate.active_plan_id);
-                                            return activePlan ? (
-                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium" style={{ backgroundColor: activePlan.color + '20', color: activePlan.color }}>
-                                                    {activePlan.title}
-                                                </span>
-                                            ) : (
-                                                <span className="text-gray-400 text-xs">-</span>
-                                            );
-                                        })()}
-                                    </td>
-
                                     {/* Status Column */}
-                                    < td className="px-6 py-4 text-center" >
+                                    <td className="px-6 py-4 text-center">
                                         <button
                                             onClick={() => onToggleStatus(candidate.id, candidate.is_active || false)}
                                             className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${candidate.is_active

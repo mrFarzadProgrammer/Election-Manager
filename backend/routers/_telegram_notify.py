@@ -101,17 +101,21 @@ def notify_question_answer_published(*, candidate: models.User, submission: mode
 
         topic = (getattr(submission, "topic", None) or "").strip()
         topic_line = f"\n🗂 دسته: {topic}" if topic else ""
-        link_line = f"\n\n🔗 مشاهده در بات: {deep_link}" if deep_link else ""
 
         text = (
             "✅ پاسخ جدید به سؤال مردمی منتشر شد."
             f"\n🔖 کد سؤال: {int(submission.id)}"
             f"{topic_line}"
-            f"{link_line}"
+        )
+
+        reply_markup = (
+            {"inline_keyboard": [[{"text": "مشاهده پاسخ", "url": deep_link}]]}
+            if deep_link
+            else None
         )
 
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=10.0, trust_env=True) as client:
             for chat_id in uniq:
                 try:
                     resp = client.post(
@@ -120,6 +124,7 @@ def notify_question_answer_published(*, candidate: models.User, submission: mode
                             "chat_id": chat_id,
                             "text": text,
                             "disable_web_page_preview": True,
+                            **({"reply_markup": reply_markup} if reply_markup else {}),
                         },
                     )
                     # If we used @username and Telegram returns a numeric chat.id, persist it.
@@ -164,3 +169,85 @@ def notify_question_answer_published(*, candidate: models.User, submission: mode
                     logger.exception("Question notify exception")
     except Exception:
         logger.exception("Question notify wrapper exception")
+
+
+def notify_feedback_answer_published(*, candidate: models.User, submission: models.BotSubmission) -> None:
+    """Best-effort: notify candidate socials (group + channel) when a feedback gets answered.
+
+    Must never fail the API request.
+    """
+    try:
+        token = (getattr(candidate, "bot_token", None) or "").strip()
+        if not token:
+            return
+
+        socials = getattr(candidate, "socials", None) or {}
+        if not isinstance(socials, dict):
+            socials = {}
+
+        group_chat_id = socials.get("telegram_group_chat_id") or socials.get("telegramGroupChatId")
+        channel_chat_id = socials.get("telegram_channel_chat_id") or socials.get("telegramChannelChatId")
+
+        group_raw = socials.get("telegram_group") or socials.get("telegramGroup")
+        channel_raw = socials.get("telegram_channel") or socials.get("telegramChannel")
+        targets = [
+            _extract_telegram_chat_target(str(group_chat_id) if group_chat_id is not None else None)
+            or _extract_telegram_chat_target(str(group_raw) if group_raw is not None else None),
+            _extract_telegram_chat_target(str(channel_chat_id) if channel_chat_id is not None else None)
+            or _extract_telegram_chat_target(str(channel_raw) if channel_raw is not None else None),
+        ]
+        targets = [t for t in targets if t is not None]
+
+        seen: set[str] = set()
+        uniq: list[str | int] = []
+        for t in targets:
+            key = str(t)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(t)
+
+        if not uniq:
+            return
+
+        bot_username = _candidate_bot_username(candidate)
+        deep_link = f"https://t.me/{bot_username}?start=feedback_{int(submission.id)}" if bot_username else None
+
+        tag = (getattr(submission, "tag", None) or "").strip()
+        tag_line = f"\n🏷 تگ: {tag}" if tag else ""
+
+        text = (
+            "✅ پاسخ به نظر/دغدغه مردمی منتشر شد."
+            f"\n🔖 کد پیام: {int(submission.id)}"
+            f"{tag_line}"
+        )
+
+        reply_markup = (
+            {"inline_keyboard": [[{"text": "مشاهده پاسخ", "url": deep_link}]]}
+            if deep_link
+            else None
+        )
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        with httpx.Client(timeout=10.0, trust_env=True) as client:
+            for chat_id in uniq:
+                try:
+                    resp = client.post(
+                        url,
+                        json={
+                            "chat_id": chat_id,
+                            "text": text,
+                            "disable_web_page_preview": True,
+                            **({"reply_markup": reply_markup} if reply_markup else {}),
+                        },
+                    )
+                    if not resp.is_success:
+                        logger.warning(
+                            "Feedback notify failed: status=%s body=%s",
+                            resp.status_code,
+                            (resp.text or "")[:500],
+                        )
+                except Exception:
+                    logger.exception("Feedback notify exception")
+    except Exception:
+        logger.exception("Feedback notify wrapper exception")

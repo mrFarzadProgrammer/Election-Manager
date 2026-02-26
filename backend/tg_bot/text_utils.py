@@ -1,6 +1,9 @@
 import asyncio
+import html
+import json
 import re
 from datetime import datetime, timezone
+from typing import Any
 
 import jdatetime
 from telegram.error import NetworkError, TimedOut, RetryAfter
@@ -10,6 +13,40 @@ def normalize_text(value) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def repair_suspicious_json_backslashes(text: str) -> str:
+    """Heuristic repair for invalid JSON that commonly appears in Windows paths.
+
+    Example: a string contains an unescaped backslash like "C:\\Users\\..." but is stored as "C:\\Users".
+    Also handles invalid unicode escape prefixes like "\\uploads" which would otherwise be read as "\\u...".
+    """
+    if not text:
+        return text
+    # "\u" is valid only if followed by 4 hex digits.
+    fixed = re.sub(r"\\u(?![0-9a-fA-F]{4})", r"\\\\u", text)
+    # Any other backslash must start a valid JSON escape sequence.
+    fixed = re.sub(r"\\(?![\"\\/bfnrtu])", r"\\\\", fixed)
+    return fixed
+
+
+def json_loads_loose(text: str) -> Any | None:
+    """Parse JSON, attempting a best-effort repair when the input is almost-JSON.
+
+    Returns None if parsing fails.
+    """
+    if text is None:
+        return None
+    s = str(text).strip()
+    if not s:
+        return None
+    try:
+        return json.loads(s)
+    except Exception:
+        try:
+            return json.loads(repair_suspicious_json_backslashes(s))
+        except Exception:
+            return None
 
 
 def normalize_button_text(value: str | None) -> str:
@@ -110,6 +147,96 @@ def format_public_question_answer_block(*, topic: str | None, question: str, ans
     return "\n\n".join([p for p in parts if p]).strip()
 
 
+def format_public_feedback_answer_block(*, tag: str | None, feedback_text: str, answer: str, answered_at: datetime | None) -> str:
+    t = normalize_text(tag)
+    q = normalize_text(feedback_text)
+    a = normalize_text(answer)
+    date_line = to_jalali_date_ymd(answered_at)
+
+    parts: list[str] = []
+    if t:
+        parts.append(f"🏷 {t}")
+    parts.append(f"📝 {q}")
+    parts.append("\n━━━━━━━━━━━━\n✅ پاسخ رسمی نماینده\n\n" + a)
+    if date_line:
+        parts.append(f"📅 {date_line}")
+    return "\n\n".join([p for p in parts if p]).strip()
+
+
+def _topic_base_and_label(topic: str) -> tuple[str, str]:
+    t = normalize_text(topic)
+    if not t:
+        return "", ""
+    if "|" in t:
+        base, detail = t.split("|", 1)
+        base = base.strip()
+        detail = detail.strip()
+        if detail:
+            return base, detail
+        return base, base
+    return t, t
+
+
+def _make_hashtag(text: str) -> str:
+    t = normalize_text(text)
+    if not t:
+        return ""
+    t = t.replace(" ", "_")
+    t = re.sub(r"[^0-9A-Za-z_\u0600-\u06FF]", "", t)
+    t = re.sub(r"_+", "_", t).strip("_")
+    return f"#{t}" if t else ""
+
+
+def _topic_hashtags(topic: str) -> str:
+    base, label = _topic_base_and_label(topic)
+    tags: list[str] = []
+    base_tag = _make_hashtag(base)
+    if base_tag:
+        tags.append(base_tag)
+    # Add the custom label tag only if it's short and different.
+    if label and label != base and len(label) <= 24:
+        detail_tag = _make_hashtag(label)
+        if detail_tag:
+            tags.append(detail_tag)
+    tags.append("#سؤال_از_نماینده")
+    return " ".join([t for t in tags if t])
+
+
+def format_public_question_answer_card_html(*, idx: int, topic: str, question: str, answer: str, answered_at: datetime | None) -> str:
+    raw_topic = normalize_text(topic)
+    base_topic, label_topic = _topic_base_and_label(raw_topic)
+    display_topic = label_topic or base_topic or "سایر"
+
+    q = normalize_text(question)
+    a = normalize_text(answer)
+
+    esc_q = html.escape(q)
+    esc_a = html.escape(a)
+    date_line = to_jalali_date_ymd(answered_at)
+    num = to_fa_digits(str(idx))
+
+    parts: list[str] = []
+    parts.append(f"🟢 <b>{html.escape(display_topic)}</b>")
+    parts.append("──────────────")
+    parts.append(f"🧩 <b>پرسش {html.escape(num)}</b>")
+    parts.append(f"«{esc_q}»")
+    parts.append("")
+    parts.append("✅ <b>پاسخ رسمی نماینده</b>")
+    parts.append(esc_a)
+
+    meta: list[str] = []
+    tags = _topic_hashtags(raw_topic or display_topic)
+    if tags:
+        meta.append(f"🏷 <b>تگ‌ها:</b> {html.escape(tags)}")
+    if date_line:
+        meta.append(f"📅 <b>تاریخ پاسخ:</b> {html.escape(date_line)}")
+    if meta:
+        parts.append("")
+        parts.extend(meta)
+
+    return "\n".join([p for p in parts if p is not None]).strip()
+
+
 async def send_question_list_message(*, safe_reply, update_message, topic: str, items: list[dict], back_keyboard):
     header = f"🗂 {topic}\n\nتمام سؤال‌های این بخش (شماره را ارسال کنید):\n"
     lines: list[str] = []
@@ -178,6 +305,57 @@ async def send_question_answers_message(*, safe_reply, update_message, topic: st
         await safe_reply(update_message, ch, reply_markup=rm)
 
 
+async def send_question_answers_message_cards_html(*, safe_reply, update_message, items: list[dict], back_keyboard):
+    # Render a richer, card-like HTML view (used for all topics).
+    blocks: list[str] = []
+    for idx, it in enumerate(items, start=1):
+        topic = normalize_text(it.get("topic") or "")
+        q = normalize_text(it.get("q") or "")
+        a = normalize_text(it.get("a") or "")
+        answered_at = it.get("answered_at")
+        if q and a:
+            blocks.append(
+                format_public_question_answer_card_html(
+                    idx=idx,
+                    topic=topic,
+                    question=q,
+                    answer=a,
+                    answered_at=answered_at if isinstance(answered_at, datetime) else None,
+                )
+            )
+
+    if not blocks:
+        await safe_reply(
+            update_message,
+            "فعلاً پاسخ عمومی ثبت نشده است.",
+            reply_markup=back_keyboard,
+        )
+        return
+
+    max_len = 3500
+    chunks: list[str] = []
+    current = ""
+    for blk in blocks:
+        candidate = (current + "\n\n" + blk) if current else blk
+        if len(candidate) > max_len and current:
+            chunks.append(current)
+            current = blk
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+
+    for i, ch in enumerate(chunks):
+        rm = back_keyboard if i == len(chunks) - 1 else None
+        await safe_reply(
+            update_message,
+            ch,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=rm,
+        )
+
+
 def normalize_telegram_link(value: str) -> str:
     v = normalize_text(value)
     if not v:
@@ -201,9 +379,9 @@ def format_social_links_lines(socials: dict) -> list[str]:
     ch = normalize_telegram_link(str(socials.get("telegramChannel") or socials.get("telegram_channel") or ""))
     gr = normalize_telegram_link(str(socials.get("telegramGroup") or socials.get("telegram_group") or ""))
     if ch:
-        lines.append(f"📣 کانال تلگرام: {ch}")
+        lines.append(f"📣 <b>کانال تلگرام:</b> {html.escape(ch)}")
     if gr:
-        lines.append(f"👥 گروه تلگرام: {gr}")
+        lines.append(f"👥 <b>گروه تلگرام:</b> {html.escape(gr)}")
     return lines
 
 
@@ -211,21 +389,25 @@ def build_feedback_intro_text(feedback_intro_text: str, socials: dict) -> str:
     lines = [feedback_intro_text]
     link_lines = format_social_links_lines(socials)
     if link_lines:
-        lines.append("\nبرای دریافت جمع‌بندی‌ها می‌توانید از لینک‌های زیر استفاده کنید:")
+        lines.append("")
+        lines.append("🔗 <b>دریافت جمع‌بندی‌ها</b>")
+        lines.append("برای دریافت جمع‌بندی‌ها می‌توانید از لینک‌های زیر استفاده کنید:")
         lines.extend(link_lines)
     return "\n".join(lines)
 
 
 def build_feedback_confirmation_text(socials: dict) -> str:
-    base = (
-        "✅ نظر / دغدغه شما با موفقیت ثبت شد.\n"
-        "این پیام‌ها بررسی و به نماینده منتقل می‌شوند.\n\n"
-        "در صورت تمایل می‌توانید برای دریافت جمع‌بندی‌ها\n"
-        "در کانال یا گروه اطلاع‌رسانی عضو شوید."
-    ).strip()
-    lines = [base]
+    lines: list[str] = []
+    lines.append("✅ <b>نظر / دغدغه شما ثبت شد</b>")
+    lines.append("──────────────")
+    lines.append("📨 پیام شما با موفقیت ثبت شد.")
+    lines.append("🔎 این پیام‌ها بررسی و به نماینده منتقل می‌شوند.")
+    lines.append("🙏 سپاس از همراهی شما.")
+
     link_lines = format_social_links_lines(socials)
     if link_lines:
         lines.append("")
+        lines.append("🔗 <b>دریافت جمع‌بندی‌ها</b>")
+        lines.append("در صورت تمایل می‌توانید در کانال یا گروه اطلاع‌رسانی عضو شوید:")
         lines.extend(link_lines)
     return "\n".join(lines)

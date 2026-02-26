@@ -1,4 +1,5 @@
 import logging
+import html
 import os
 import re
 import json
@@ -36,10 +37,12 @@ from .text_utils import (
     build_feedback_confirmation_text,
     build_feedback_intro_text,
     format_public_question_answer_block,
+    format_public_feedback_answer_block,
     normalize_button_text,
     normalize_text,
     safe_reply_text,
     send_question_answers_message,
+    send_question_answers_message_cards_html,
 )
 from .ui_constants import (
     BTN_ABOUT_BOT,
@@ -84,6 +87,7 @@ from .ui_constants import (
     STATE_OTHER_MENU,
     STATE_PROGRAMS,
     STATE_QUESTION_ASK_ENTRY,
+    STATE_QUESTION_ASK_OTHER_TOPIC,
     STATE_QUESTION_ASK_TEXT,
     STATE_QUESTION_ASK_TOPIC,
     STATE_QUESTION_CATEGORY,
@@ -159,7 +163,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    # Deep-link support: https://t.me/<bot>?start=question_<id>
+    # Deep-link support: https://t.me/<bot>?start=question_<id> or feedback_<id>
     try:
         args = list(getattr(context, "args", None) or [])
         if args:
@@ -207,6 +211,57 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 context.user_data["state"] = STATE_QUESTION_MENU
                 await safe_reply_text(msg, block, reply_markup=build_question_hub_keyboard())
+                return
+
+            m2 = re.fullmatch(r"feedback_(\d+)", str(args[0]).strip())
+            if m2:
+                fid = int(m2.group(1))
+
+                def _get_public_answered_feedback_by_id(cid: int, submission_id: int) -> BotSubmission | None:
+                    db = SessionLocal()
+                    try:
+                        return (
+                            db.query(BotSubmission)
+                            .filter(
+                                BotSubmission.id == int(submission_id),
+                                BotSubmission.candidate_id == int(cid),
+                                BotSubmission.type == "FEEDBACK",
+                                BotSubmission.status == "ANSWERED",
+                                BotSubmission.is_public == True,  # noqa: E712
+                                BotSubmission.answer.isnot(None),
+                            )
+                            .first()
+                        )
+                    finally:
+                        db.close()
+
+                row2 = await run_db_query(_get_public_answered_feedback_by_id, candidate_id, fid)
+                msg2 = update.effective_message
+                if not msg2:
+                    return
+
+                if not row2:
+                    context.user_data["state"] = STATE_MAIN
+                    await safe_reply_text(
+                        msg2,
+                        "این پیام یافت نشد یا هنوز پاسخ عمومی ندارد.",
+                        reply_markup=build_main_keyboard(),
+                    )
+                    return
+
+                f_txt = normalize_text(getattr(row2, "text", ""))
+                a_txt2 = normalize_text(getattr(row2, "answer", ""))
+                tag2 = normalize_text(getattr(row2, "tag", ""))
+                answered_at2 = getattr(row2, "answered_at", None)
+                block2 = format_public_feedback_answer_block(
+                    tag=tag2,
+                    feedback_text=f_txt,
+                    answer=a_txt2,
+                    answered_at=answered_at2,
+                )
+
+                context.user_data["state"] = STATE_MAIN
+                await safe_reply_text(msg2, block2, reply_markup=build_main_keyboard())
                 return
     except Exception:
         logger.exception("Failed to handle /start deep-link")
@@ -477,17 +532,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info("Mapping Programs button variant: %r -> %r (state=%s)", text, BTN_PROGRAMS, state)
         text = BTN_PROGRAMS
 
-    def _has_recent_bot_request_sync(*, candidate_id: int, telegram_user_id: str, minutes: int, phone: str | None = None) -> bool:
+    def _has_existing_bot_request_sync(*, candidate_id: int, telegram_user_id: str, phone: str | None = None) -> bool:
         db = SessionLocal()
         try:
-            cutoff = datetime.utcnow() - timedelta(minutes=int(minutes))
             q = (
                 db.query(BotSubmission)
                 .filter(
                     BotSubmission.candidate_id == int(candidate_id),
                     BotSubmission.telegram_user_id == str(telegram_user_id),
                     BotSubmission.type == "BOT_REQUEST",
-                    BotSubmission.created_at >= cutoff,
                 )
                 .order_by(BotSubmission.created_at.desc())
             )
@@ -708,10 +761,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if update.effective_user is not None and phone:
                 is_dup = await run_db_query(
-                    _has_recent_bot_request_sync,
+                    _has_existing_bot_request_sync,
                     candidate_id=int(candidate_id),
                     telegram_user_id=str(update.effective_user.id),
-                    minutes=60,
                     phone=phone,
                 )
                 if is_dup:
@@ -728,11 +780,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     context.user_data.pop("botreq_constituency", None)
                     context.user_data.pop("botreq_contact", None)
 
-                    await safe_reply_text(
-                        update.message,
-                        "✅ اطلاعات شما دریافت شد.\nتیم پشتیبانی به‌زودی با شما تماس می‌گیرد.",
-                        reply_markup=reply_markup,
-                    )
+                    await safe_reply_text(update.message, "✅ درخواست شما قبلاً ثبت شده است.\nتیم پشتیبانی به‌زودی با شما تماس می‌گیرد.", reply_markup=reply_markup)
                     return
         except Exception:
             pass
@@ -839,14 +887,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 source = f"از بات: {cand_name} (@{cand_bot})" if cand_bot else f"از بات: {cand_name}"
                 msg = "\n".join([x for x in [header, source, formatted] if x]).strip()
                 for cid in admin_chat_ids:
+                    # Don't echo the admin notification back into the same chat where the requester is talking to the bot.
+                    if update.effective_chat and str(update.effective_chat.id) == str(cid):
+                        continue
                     await context.bot.send_message(chat_id=int(cid), text=msg)
-                    if phone:
-                        try:
-                            fn = normalize_text(getattr(contact_obj, "first_name", None)) or (full_name.split(" ")[0] if full_name else "مشاوره")
-                            ln = normalize_text(getattr(contact_obj, "last_name", None)) or (" ".join(full_name.split(" ")[1:]) if full_name else "")
-                            await context.bot.send_contact(chat_id=int(cid), phone_number=phone, first_name=fn, last_name=ln or None)
-                        except Exception:
-                            pass
             else:
                 logger.warning("BOT_REQUEST admin notify skipped: no admin chat id resolved")
         except Exception:
@@ -866,7 +910,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("botreq_contact", None)
         await safe_reply_text(
             update.message,
-            "✅ اطلاعات شما دریافت شد.\nتیم پشتیبانی به‌زودی با شما تماس می‌گیرد.",
+            """⭐️ درخواست شما با موفقیت ثبت شد!
+
+🔹 تیم پشتیبانی در کمتر از ۴۸ ساعت با شما تماس خواهد گرفت.""",
             reply_markup=reply_markup,
         )
 
@@ -899,7 +945,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data["state"] = STATE_MAIN
         context.user_data.pop("feedback_topic", None)
-        await safe_reply_text(update.message, build_feedback_confirmation_text(socials), reply_markup=build_main_keyboard())
+        await safe_reply_text(
+            update.message,
+            build_feedback_confirmation_text(socials),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=build_main_keyboard(),
+        )
 
         try:
             track_flow_event_sync(candidate_id=int(candidate_id), flow_type="comment", event="flow_completed")
@@ -947,6 +999,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         def _get_category_answered(cid: int, topic: str) -> list[BotSubmission]:
             db = SessionLocal()
             try:
+                known = [c for c in QUESTION_CATEGORIES if c != "سایر"]
+                if topic == "سایر":
+                    q = (
+                        db.query(BotSubmission)
+                        .filter(
+                            BotSubmission.candidate_id == int(cid),
+                            BotSubmission.type == "QUESTION",
+                            BotSubmission.status == "ANSWERED",
+                            BotSubmission.is_public == True,  # noqa: E712
+                            BotSubmission.answer.isnot(None),
+                            or_(
+                                BotSubmission.topic.is_(None),
+                                BotSubmission.topic == "",
+                                ~BotSubmission.topic.in_(known),
+                            ),
+                        )
+                        .order_by(BotSubmission.answered_at.asc(), BotSubmission.id.asc())
+                    )
+                    return q.all()
+
                 q = (
                     db.query(BotSubmission)
                     .filter(
@@ -979,15 +1051,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             a_txt = normalize_text(getattr(r, "answer", ""))
             rid = getattr(r, "id", None)
             answered_at = getattr(r, "answered_at", None)
+            topic_raw = normalize_text(getattr(r, "topic", ""))
+            topic_for_card = topic_raw or chosen
             if q_txt and a_txt:
-                items.append({"id": rid, "q": q_txt, "a": a_txt, "answered_at": answered_at})
+                items.append({"id": rid, "topic": topic_for_card, "q": q_txt, "a": a_txt, "answered_at": answered_at})
 
         context.user_data["view_topic"] = chosen
         context.user_data["state"] = STATE_QUESTION_VIEW_RESULTS
-        await send_question_answers_message(
+
+        await send_question_answers_message_cards_html(
             safe_reply=safe_reply_text,
             update_message=update.message,
-            topic=chosen,
             items=items,
             back_keyboard=build_back_keyboard(),
         )
@@ -1023,7 +1097,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if chosen not in QUESTION_CATEGORIES:
             await safe_reply_text(update.message, "موضوع نامعتبر است.", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
             return
+
+        if chosen == "سایر":
+            context.user_data["state"] = STATE_QUESTION_ASK_OTHER_TOPIC
+            await safe_reply_text(
+                update.message,
+                "موضوع مدنظر خود را کوتاه بنویسید (مثلاً «یارانه»، «مالیات»، «کسب‌وکار»):\n(در یک پیام)",
+                reply_markup=build_back_keyboard(),
+            )
+            return
+
         context.user_data["question_topic"] = chosen
+        try:
+            track_flow_event_sync(candidate_id=int(candidate_id), flow_type="question", event="flow_started")
+        except Exception:
+            pass
+        context.user_data["state"] = STATE_QUESTION_ASK_TEXT
+        await safe_reply_text(update.message, "سؤال‌تان را کوتاه و شفاف بنویسید.\n(در یک پیام)", reply_markup=build_back_keyboard())
+        return
+
+    if state == STATE_QUESTION_ASK_OTHER_TOPIC:
+        if _is_back(text):
+            context.user_data["state"] = STATE_QUESTION_ASK_TOPIC
+            await safe_reply_text(update.message, "موضوع سؤال شما چیست؟", reply_markup=build_question_categories_keyboard(prefix_icon=True, include_back=True))
+            return
+
+        other_topic = normalize_text(text)
+        other_topic = re.sub(r"\s+", " ", other_topic).strip()
+        if len(other_topic) < 2:
+            await safe_reply_text(update.message, "موضوع خیلی کوتاه است. دوباره ارسال کنید:")
+            return
+        if len(other_topic) > 40:
+            await safe_reply_text(update.message, "موضوع خیلی طولانی است (حداکثر ۴۰ کاراکتر). کوتاه‌تر کنید:")
+            return
+
+        # Store as a single string so the DB still captures the detail without schema changes.
+        context.user_data["question_topic"] = f"سایر|{other_topic}"
         try:
             track_flow_event_sync(candidate_id=int(candidate_id), flow_type="question", event="flow_started")
         except Exception:
@@ -1100,16 +1209,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Programs state
     if state == STATE_PROGRAMS:
-        if text.startswith("سوال "):
-            try:
-                idx = int(text.replace("سوال", "").strip()) - 1
-            except Exception:
-                idx = -1
-            if 0 <= idx < len(PROGRAM_QUESTIONS):
-                q = PROGRAM_QUESTIONS[idx]
-                a = get_program_answer(candidate, idx)
-                await safe_reply_text(update.message, f"{q}\n\nپاسخ نماینده:\n{a}")
-                return
+        def _program_choice_index(t: str) -> int:
+            tt = normalize_button_text(t)
+            if tt.startswith("سوال "):
+                try:
+                    return int(tt.replace("سوال", "").strip()) - 1
+                except Exception:
+                    return -1
+            m = re.match(r"^(\d{1,2})\s*\)", tt)
+            if m:
+                try:
+                    return int(m.group(1)) - 1
+                except Exception:
+                    return -1
+            if re.fullmatch(r"\d{1,2}", tt):
+                try:
+                    return int(tt) - 1
+                except Exception:
+                    return -1
+            # Allow selecting from richer labels like "1) 🧾 شفافیت".
+            m2 = re.match(r"^(\d{1,2})\D+", tt)
+            if m2:
+                try:
+                    return int(m2.group(1)) - 1
+                except Exception:
+                    return -1
+            return -1
+
+        idx = _program_choice_index(text)
+        if 0 <= idx < len(PROGRAM_QUESTIONS):
+            rep_name = normalize_text(candidate.get("name")) or "نماینده"
+            q = normalize_text(PROGRAM_QUESTIONS[idx])
+            a = normalize_text(get_program_answer(candidate, idx))
+
+            blocks: list[str] = []
+            blocks.append("🟢 <b>برنامه‌ها</b>")
+            blocks.append("──────────────")
+            blocks.append(f"❓ {idx + 1}) {html.escape(q)}")
+            blocks.append("")
+            blocks.append(f"✅ <b>پاسخ {html.escape(rep_name)}</b>")
+            blocks.append(html.escape(a) if a else "—")
+
+            await safe_reply_text(
+                update.message,
+                "\n".join([b for b in blocks if b is not None]).strip(),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            return
         await safe_reply_text(update.message, "لطفاً یکی از گزینه‌ها را انتخاب کنید یا «بازگشت» را بزنید.")
         return
 
@@ -1236,73 +1383,105 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # پیام توضیح بالای لیست
+        # Minimal, per-commitment cards (each commitment in a separate message)
         await safe_reply_text(
             update.message,
-            "📜 تعهدات نماینده\n\nℹ️ تعهدات نماینده اسنادی رسمی هستند.\nپس از ثبت، متن آن‌ها غیرقابل ویرایش است.\nتنها وضعیت و گزارش پیشرفت به‌روزرسانی می‌شود.",
+            "📜 تعهدات نماینده\n\nهر تعهد به‌صورت کارت مستقل نمایش داده می‌شود.",
             reply_markup=None,
         )
 
-        for r in rows:
-            # وضعیت
-            status_map = {
-                "completed": ("🟢 انجام شده", "green"),
-                "in_progress": ("🟡 در حال پیگیری", "yellow"),
-                "active": ("🟡 در حال پیگیری", "yellow"),
-                "failed": ("🔴 انجام نشده / متوقف", "red"),
-                "draft": ("⚪️ پیش‌نویس", "gray"),
-            }
-            status_label, _ = status_map.get(r.get("status", "active"), ("🟡 در حال پیگیری", "yellow"))
-            # هدر کارت
-            card = [
-                "📜 تعهد رسمی نماینده",
-                f"وضعیت: {status_label}",
-                "",
-            ]
-            # بدنه کارت
-            title = normalize_text(r.get("title", ""))
+        from .text_utils import to_fa_digits, to_jalali_date_ymd
+        import datetime
+
+        def _status_emoji(value: str | None) -> tuple[str, str]:
+            v = (value or "").strip().lower()
+            if v == "completed":
+                return "✅", "انجام‌شده"
+            # Spec only asks for two states; treat everything else as "in progress".
+            return "🟡", "در حال پیگیری"
+
+        def _shorten_inline(text: str, max_len: int) -> str:
+            s = normalize_text(text)
+            s = re.sub(r"\s+", " ", s).strip()
+            if not s:
+                return ""
+            if len(s) <= max_len:
+                return s
+            return (s[: max(0, max_len - 1)].rstrip() + "…")
+
+        def _summary_3_lines(text: str, *, max_lines: int = 3, line_len: int = 46) -> str:
+            s = normalize_text(text)
+            s = s.replace("\r", " ").replace("\n", " ")
+            s = re.sub(r"\s+", " ", s).strip()
+            if not s:
+                return ""
+            words = s.split(" ")
+            lines: list[str] = []
+            cur = ""
+            idx = 0
+            truncated = False
+
+            while idx < len(words) and len(lines) < max_lines:
+                w = words[idx]
+                candidate = (cur + " " + w).strip() if cur else w
+                if len(candidate) <= line_len:
+                    cur = candidate
+                    idx += 1
+                    continue
+
+                if cur:
+                    lines.append(cur)
+                    cur = ""
+                    continue
+
+                # single very-long word
+                lines.append(w[: max(1, line_len - 1)] + "…")
+                idx += 1
+
+            if cur and len(lines) < max_lines:
+                lines.append(cur)
+
+            if idx < len(words):
+                truncated = True
+
+            if truncated and lines:
+                # Ensure last line ends with ellipsis.
+                if not lines[-1].endswith("…"):
+                    if len(lines[-1]) >= line_len:
+                        lines[-1] = lines[-1][: max(1, line_len - 1)].rstrip() + "…"
+                    else:
+                        lines[-1] = lines[-1].rstrip() + "…"
+
+            return "\n".join(lines[:max_lines]).strip()
+
+        for i, r in enumerate(rows, start=1):
+            emoji, status_label = _status_emoji(str(r.get("status") or ""))
+
+            title = _shorten_inline(r.get("title", ""), 60)
             body = normalize_text(r.get("body", ""))
-            if title:
-                card.append(f"عنوان تعهد:\n{title}")
-            if body:
-                card.append(f"شرح تعهد:\n{body}")
-            card.append("")
-            card.append("🔒 این تعهد پس از ثبت، غیرقابل ویرایش است.")
-            card.append("")
-            # متادیتا
-            from .text_utils import to_jalali_date_ymd
-            created_at_jalali = r.get("created_at_jalali")
-            created_at = r.get("created_at")
-            import datetime
+            summary = _summary_3_lines(body)
+
+            created_at_jalali = normalize_text(r.get("created_at_jalali"))
+            created_at = normalize_text(r.get("created_at"))
             dt = None
             if created_at:
                 try:
                     dt = datetime.datetime.fromisoformat(created_at)
                 except Exception:
                     dt = None
-            if created_at_jalali:
-                card.append(f"📅 تاریخ ثبت: {created_at_jalali}")
-            else:
-                card.append(f"📅 تاریخ ثبت: {to_jalali_date_ymd(dt) if dt else '---'}")
-            card.append(f"🆔 شناسه تعهد: CM-{r.get('id', 0):04d}")
+            date_label = created_at_jalali or (to_jalali_date_ymd(dt) if dt else "—")
 
-            # گزارش‌های پیشرفت
-            progress_logs = r.get("progress_logs", [])
-            if progress_logs:
-                card.append("")
-                card.append("🔄 گزارش‌های پیشرفت:")
-                for log in progress_logs:
-                    log_dt = None
-                    if log.get("created_at"):
-                        try:
-                            log_dt = datetime.datetime.fromisoformat(log["created_at"])
-                        except Exception:
-                            log_dt = None
-                    log_date = to_jalali_date_ymd(log_dt) if log_dt else "---"
-                    note = normalize_text(log.get("note", ""))
-                    card.append(f"🗓 {log_date}\n{note}")
+            parts: list[str] = []
+            parts.append(f"🧾 تعهد شماره {to_fa_digits(i)}")
+            if title:
+                parts.append(f"عنوان: {title}")
+            parts.append(f"وضعیت: {emoji} {status_label}")
+            if summary:
+                parts.append("خلاصه:")
+                parts.append(summary)
+            parts.append(f"📅 تاریخ ثبت: {date_label}")
 
-            await safe_reply_text(update.message, "\n".join(card), reply_markup=None)
+            await safe_reply_text(update.message, "\n".join([p for p in parts if p]).strip(), reply_markup=None)
         await safe_reply_text(update.message, "برای بازگشت، دکمه بازگشت را بزنید.", reply_markup=build_back_keyboard())
         return
 
@@ -1357,8 +1536,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state = STATE_ABOUT_DETAIL
 
         name = normalize_text(candidate.get("name")) or "نماینده"
-        constituency = candidate_constituency(candidate)
-        slogan = normalize_text(candidate.get("slogan") or (candidate.get("bot_config") or {}).get("slogan"))
+        constituency = normalize_text(candidate_constituency(candidate))
+        slogan_raw = normalize_text(candidate.get("slogan") or (candidate.get("bot_config") or {}).get("slogan"))
 
         image_url = normalize_text(candidate.get("image_url"))
         if image_url:
@@ -1372,15 +1551,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error("Failed to send candidate photo: %s", e)
 
-        lines = [name]
-        if constituency:
-            lines.append(f"حوزه انتخابیه: {constituency}")
-        if slogan:
-            lines.append(f"📣 {slogan}")
+        def _parse_slogans(raw: str) -> list[str]:
+            if not raw:
+                return []
+            s = re.sub(r"\r\n?", "\n", raw).strip()
+            parts: list[str]
+            if "\n" in s:
+                parts = [p.strip() for p in s.split("\n")]
+            elif "؛" in s:
+                parts = [p.strip() for p in s.split("؛")]
+            elif "،" in s:
+                parts = [p.strip() for p in s.split("،")]
+            elif "|" in s:
+                parts = [p.strip() for p in s.split("|")]
+            else:
+                parts = [s]
+
+            cleaned: list[str] = []
+            for p in parts:
+                p = re.sub(r"^[-•●▪▫✅🟢🔰✨\s]+", "", p).strip()
+                p = re.sub(r"\s+", " ", p)
+                if p:
+                    cleaned.append(p)
+            return cleaned[:5]
+
+        esc_name = html.escape(name)
+        esc_constituency = html.escape(constituency)
+        slogans = _parse_slogans(slogan_raw)
+        esc_slogans = [html.escape(s) for s in slogans]
+
+        blocks: list[str] = []
+        blocks.append(f"🟢 <b>{esc_name}</b>")
+        blocks.append("──────────────")
+        if esc_constituency:
+            blocks.append(f"📍 <b>حوزه انتخاباتی:</b> {esc_constituency}")
+        if esc_slogans:
+            blocks.append("✨ <b>شعارها</b>")
+            blocks.extend([f"🔰 {s}" for s in esc_slogans])
+
+        message_html = "\n".join([b for b in blocks if b]).strip()
 
         await safe_reply_text(
             update.message,
-            "\n".join(lines),
+            message_html,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
             reply_markup=ReplyKeyboardMarkup(
                 [[KeyboardButton(BTN_PROFILE_SUMMARY), KeyboardButton(BTN_BACK)]],
                 resize_keyboard=True,
@@ -1395,8 +1610,84 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["_return_state"] = STATE_ABOUT_MENU
             context.user_data["state"] = STATE_ABOUT_DETAIL
             state = STATE_ABOUT_DETAIL
-        resume_text = format_structured_resume(candidate)
-        await safe_reply_text(update.message, f"👤 سوابق\n\n{resume_text}", reply_markup=build_back_keyboard())
+
+        name = normalize_text(candidate.get("name")) or "نماینده"
+
+        def _coerce_bot_config_local(cand: dict) -> dict:
+            raw = cand.get("bot_config")
+            if raw is None:
+                return {}
+            if isinstance(raw, dict):
+                return raw
+            if isinstance(raw, str):
+                s = raw.strip()
+                if not s:
+                    return {}
+                try:
+                    parsed = json.loads(s)
+                    return parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    return {}
+            return {}
+
+        def _as_lines(v) -> list[str]:
+            if v is None:
+                return []
+            if isinstance(v, list):
+                return [normalize_text(x) for x in v if normalize_text(x)]
+            if isinstance(v, str):
+                return [s.strip() for s in v.splitlines() if s.strip()]
+            vv = normalize_text(v)
+            return [vv] if vv else []
+
+        bot_cfg = _coerce_bot_config_local(candidate)
+        structured = bot_cfg.get("structured_resume") if isinstance(bot_cfg, dict) else None
+
+        blocks: list[str] = []
+        blocks.append(f"🟢 <b>{html.escape(name)}</b>")
+        blocks.append("──────────────")
+
+        # Per UX request: show only these 3 sections (no extra sections like highlights/title/experience).
+        education_items: list[str] = []
+        executive_items: list[str] = []
+        social_items: list[str] = []
+        experience_items: list[str] = []
+        if isinstance(structured, dict):
+            education_items = _as_lines(structured.get("education"))
+            executive_items = _as_lines(structured.get("executive"))
+            social_items = _as_lines(structured.get("social"))
+            experience_items = _as_lines(structured.get("experience"))
+
+        # تحصیلات
+        blocks.append("🎓 <b>تحصیلات</b>")
+        if education_items:
+            blocks.extend([f"• {html.escape(x)}" for x in education_items[:10]])
+        else:
+            blocks.append("• ---")
+
+        # سابقه اجرایی (اگر خالی بود، از experience استفاده کن تا محتوا حذف نشود)
+        blocks.append("\n🏛 <b>سابقه اجرایی</b>")
+        exec_items = executive_items or experience_items
+        if exec_items:
+            blocks.extend([f"• {html.escape(x)}" for x in exec_items[:12]])
+        else:
+            blocks.append("• ---")
+
+        # سابقه اجتماعی / مردمی
+        blocks.append("\n🤝 <b>سابقه اجتماعی / مردمی</b>")
+        if social_items:
+            blocks.extend([f"• {html.escape(x)}" for x in social_items[:12]])
+        else:
+            blocks.append("• ---")
+
+        message_html = "\n".join([b for b in blocks if b]).strip()
+        await safe_reply_text(
+            update.message,
+            message_html,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=build_back_keyboard(),
+        )
         return
 
     if btn_eq(text, BTN_VOICE_INTRO):
@@ -1438,15 +1729,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state in {STATE_MAIN, STATE_ABOUT_MENU, STATE_OTHER_MENU} and (btn_eq(text, BTN_PROGRAMS) or btn_has(text, "برنامه")):
         context.user_data["state"] = STATE_PROGRAMS
+
+        intro_html = (
+            "🟢 <b>برنامه‌ها</b>\n"
+            "──────────────\n"
+            "🗳️ <b>درباره این پرسش‌ها</b>\n"
+            "این پرسش‌ها به‌صورت یکسان و تکراری از همه کاندیداها پرسیده می‌شود تا کاربران بتوانند برنامه‌ها، دیدگاه‌ها و اولویت‌ها را به‌صورت شفاف، منصفانه و قابل مقایسه بررسی کنند.\n\n"
+            "هدف این بخش، کمک به انتخاب آگاهانه و مقایسه واقعی برنامه‌هاست، نه تبلیغ فردی.\n\n"
+            "👇 <b>یک پرسش را انتخاب کنید:</b>"
+        )
+
+        program_buttons = [
+            "1) 🧾 شفافیت",
+            "2) 🚦 ترافیک",
+            "3) 🏠 مسکن",
+            "4) 🏘 محله",
+            "5) 🌫 هوا",
+            "6) ⚖️ عدالت",
+            "7) 🤖 هوشمند",
+            "8) 🗣 مشارکت",
+            "9) 🧭 پاسخگویی",
+            "10) 📣 ارتباط",
+        ]
+        rows = [
+            [KeyboardButton(program_buttons[1]), KeyboardButton(program_buttons[0])],
+            [KeyboardButton(program_buttons[3]), KeyboardButton(program_buttons[2])],
+            [KeyboardButton(program_buttons[5]), KeyboardButton(program_buttons[4])],
+            [KeyboardButton(program_buttons[7]), KeyboardButton(program_buttons[6])],
+            [KeyboardButton(program_buttons[9]), KeyboardButton(program_buttons[8])],
+            [KeyboardButton(BTN_BACK)],
+        ]
+
         await safe_reply_text(
             update.message,
-            "✅ برنامه‌های نماینده\n\nیکی از سوال‌های زیر را انتخاب کنید:",
+            intro_html,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
             reply_markup=ReplyKeyboardMarkup(
-                [
-                    [KeyboardButton("سوال 1"), KeyboardButton("سوال 2")],
-                    [KeyboardButton("سوال 3"), KeyboardButton("سوال 4")],
-                    [KeyboardButton("سوال 5"), KeyboardButton(BTN_BACK)],
-                ],
+                rows,
                 resize_keyboard=True,
                 is_persistent=True,
             ),
@@ -1455,8 +1775,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if btn_eq(text, BTN_FEEDBACK) or btn_eq(text, BTN_FEEDBACK_LEGACY):
         context.user_data["state"] = STATE_FEEDBACK_TEXT
-        await safe_reply_text(update.message, build_feedback_intro_text(FEEDBACK_INTRO_TEXT, socials), reply_markup=build_back_keyboard())
-        await safe_reply_text(update.message, "متن نظر/دغدغه‌تان را ارسال کنید:", reply_markup=build_back_keyboard())
+        await safe_reply_text(
+            update.message,
+            build_feedback_intro_text(FEEDBACK_INTRO_TEXT, socials),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=build_back_keyboard(),
+        )
+        await safe_reply_text(
+            update.message,
+            "🟢 <b>ارسال نظر / دغدغه</b>\n"
+            "──────────────\n"
+            "👇 <b>متن پیام را ارسال کنید:</b>\n"
+            "(برای بازگشت، «🔙 بازگشت» را بزنید.)",
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=build_back_keyboard(),
+        )
         return
 
     if btn_eq(text, BTN_QUESTION):
@@ -1481,55 +1816,108 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         offices = offices[:3]
 
         if offices:
-            blocks = []
+            blocks: list[str] = []
+            blocks.append("🟢 <b>ارتباط با نماینده</b>")
+            blocks.append("──────────────")
+
+            office_blocks: list[str] = []
             for office in offices:
                 if not isinstance(office, dict):
                     continue
                 title = normalize_text(office.get("title")) or "ستاد"
                 address = normalize_text(office.get("address"))
-                note = normalize_text(office.get("note"))
+                status = normalize_text(office.get("status"))
+                manager = normalize_text(office.get("manager"))
+                details = normalize_text(office.get("details")) or normalize_text(office.get("note"))
                 phone = normalize_text(office.get("phone"))
-                lines = [f"📍 {title}"]
-                if address:
-                    lines.append(address)
-                if note:
-                    lines.append(f"🕒 {note}")
-                if phone:
-                    lines.append(f"☎️ {phone}")
-                blocks.append("\n".join(lines))
-            if blocks:
-                await safe_reply_text(update.message, "☎️ ارتباط با نماینده\n\n" + "\n\n".join(blocks), reply_markup=build_back_keyboard())
+
+                t = html.escape(title)
+                a = html.escape(address) if address else ""
+                s = html.escape(status) if status else ""
+                m = html.escape(manager) if manager else ""
+                d = html.escape(details) if details else ""
+                p = html.escape(phone) if phone else ""
+
+                lines: list[str] = []
+                lines.append(f"📍 <b>{t}</b>")
+                if s:
+                    lines.append(f"📌 <b>وضعیت:</b> {s}")
+                if m:
+                    lines.append(f"👤 <b>مسئول ستاد:</b> {m}")
+                if p:
+                    lines.append(f"☎️ <b>شماره تماس:</b> {p}")
+                if a:
+                    lines.append(f"🧾 <b>آدرس:</b> {a}")
+                if d:
+                    lines.append(f"📝 <b>توضیحات:</b> {d}")
+                office_blocks.append("\n".join(lines))
+
+            if office_blocks:
+                blocks.append("\n\n".join(office_blocks))
+                message_html = "\n".join([b for b in blocks if b]).strip()
+                await safe_reply_text(
+                    update.message,
+                    message_html,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                    reply_markup=build_back_keyboard(),
+                )
                 return
 
-        response = f"شماره تماس: {candidate.get('phone') or '---'}\n"
+        phone = normalize_text(candidate.get("phone")) or "---"
         address = normalize_text(candidate.get("address"))
+
+        blocks: list[str] = []
+        blocks.append("🟢 <b>ارتباط با نماینده</b>")
+        blocks.append("──────────────")
+        blocks.append(f"☎️ <b>شماره تماس:</b> {html.escape(phone)}")
         if address:
-            response += f"\n📍 آدرس ستاد:\n{address}\n"
+            blocks.append(f"📍 <b>آدرس ستاد:</b> {html.escape(address)}")
         if socials:
             if socials.get("telegramChannel"):
-                response += f"\nکانال تلگرام: {socials['telegramChannel']}"
+                blocks.append(f"📣 <b>کانال تلگرام:</b> {html.escape(str(socials['telegramChannel']))}")
             if socials.get("telegramGroup"):
-                response += f"\nگروه تلگرام: {socials['telegramGroup']}"
+                blocks.append(f"👥 <b>گروه تلگرام:</b> {html.escape(str(socials['telegramGroup']))}")
             if socials.get("instagram"):
-                response += f"\nاینستاگرام: {socials['instagram']}"
-        await safe_reply_text(update.message, response.strip(), reply_markup=build_back_keyboard())
+                blocks.append(f"📸 <b>اینستاگرام:</b> {html.escape(str(socials['instagram']))}")
+
+        message_html = "\n".join([b for b in blocks if b]).strip()
+        await safe_reply_text(
+            update.message,
+            message_html,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=build_back_keyboard(),
+        )
         return
 
     if btn_eq(text, BTN_BUILD_BOT):
-        body = (
-            "این بات نمونه‌ای از بات ارتباط مستقیم نماینده با مردم است.\n\n"
-            "اگر شما نماینده، کاندیدا یا فعال سیاسی هستید،\n"
-            "می‌توانید بات اختصاصی خودتان را داشته باشید.\n\n"
-            "- معرفی رسمی نماینده\n"
-            "- دریافت نظر و دغدغه مردم\n"
-            "- پاسخ‌گویی شفاف به سؤالات\n"
-            "- انتشار برنامه‌ها\n"
-            "- اعلان پاسخ‌ها\n"
-            "- پنل مدیریت اختصاصی"
+        blocks: list[str] = []
+        blocks.append("🟢 <b>ساخت بات اختصاصی</b>")
+        blocks.append("──────────────")
+        blocks.append("این بات نمونه‌ای از بات ارتباط مستقیم نماینده با مردم است.")
+        blocks.append("")
+        blocks.append("اگر شما نماینده، کاندیدا یا فعال سیاسی هستید،")
+        blocks.append("می‌توانید بات اختصاصی خودتان را داشته باشید.")
+        blocks.append("")
+        blocks.append("✨ <b>امکانات</b>")
+        blocks.extend(
+            [
+                "🔰 معرفی رسمی نماینده",
+                "🔰 دریافت نظر و دغدغه مردم",
+                "🔰 پاسخ‌گویی شفاف به سؤالات",
+                "🔰 انتشار برنامه‌ها",
+                "🔰 اعلان پاسخ‌ها",
+                "🔰 پنل مدیریت اختصاصی",
+            ]
         )
+
+        message_html = "\n".join([b for b in blocks if b is not None]).strip()
         await safe_reply_text(
             update.message,
-            "🛠 ساخت بات اختصاصی\n━━━━━━━━━━━━\n\n" + body + "\n\n━━━━━━━━━━━━",
+            message_html,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
             reply_markup=build_bot_request_cta_keyboard(),
         )
         return
@@ -1542,14 +1930,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if context.user_data.get("state") == STATE_OTHER_MENU:
             context.user_data["_return_state"] = STATE_OTHER_MENU
 
-        # Prevent re-entering the flow if user already submitted recently.
+        # Prevent re-entering the flow if user already submitted before.
         try:
             if update.effective_user is not None:
                 already = await run_db_query(
-                    _has_recent_bot_request_sync,
+                    _has_existing_bot_request_sync,
                     candidate_id=int(candidate_id),
                     telegram_user_id=str(update.effective_user.id),
-                    minutes=60,
                     phone=None,
                 )
                 if already:
@@ -1573,10 +1960,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = STATE_BOTREQ_CONTACT
         await safe_reply_text(
             update.message,
-            """⭐️ درخواست شما با موفقیت ثبت شد!
-
-🔹 تیم پشتیبانی در کمتر از ۴۸ ساعت با شما تماس خواهد گرفت.
-🔹 برای تسریع ارتباط، لطفاً شماره تماس خود را با دکمه زیر ارسال کنید.""",
+            """برای ثبت درخواست مشاوره، لطفاً شماره تماس خود را با دکمه زیر ارسال کنید.""",
             reply_markup=build_bot_request_contact_keyboard(),
         )
         return

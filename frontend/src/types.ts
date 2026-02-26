@@ -74,7 +74,7 @@ export interface Announcement {
     attachments?: { url: string; type: 'IMAGE' | 'VIDEO' | 'VOICE' | 'FILE' }[];
 }
 
-export type FeedbackStatus = 'NEW' | 'REVIEWED';
+export type FeedbackStatus = 'NEW' | 'REVIEWED' | 'ANSWERED';
 
 export type QuestionStatus = 'PENDING' | 'ANSWERED' | 'REJECTED';
 
@@ -100,6 +100,9 @@ export interface FeedbackSubmission {
     constituency?: string;
     status: FeedbackStatus;
     tag?: string | null;
+    answer?: string | null;
+    answered_at?: string | null;
+    is_public?: boolean;
 }
 
 export interface FeedbackTagStat {

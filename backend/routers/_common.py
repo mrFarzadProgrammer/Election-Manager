@@ -114,13 +114,19 @@ def rate_limit(request: Request, *, key: str, limit: int, window_seconds: int) -
 
 
 def cookie_secure_flag() -> bool:
-    # In production behind HTTPS (Cloudflare + reverse proxy), cookies should be Secure.
-    if APP_ENV in {"production", "prod"}:
-        return True
+    """
+    ✅ فقط وقتی واقعاً HTTPS داریم Secure=True
+    """
     return env_truthy("COOKIE_SECURE")
 
 
-def set_auth_cookies(response: Response, *, access_token: str, refresh_token: str, csrf_token: str | None = None) -> None:
+def set_auth_cookies(
+    response: Response,
+    *,
+    access_token: str,
+    refresh_token: str,
+    csrf_token: str | None = None,
+) -> None:
     secure = cookie_secure_flag()
     csrf = (csrf_token or uuid.uuid4().hex).strip()
 
@@ -133,6 +139,7 @@ def set_auth_cookies(response: Response, *, access_token: str, refresh_token: st
         path="/",
         max_age=auth.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
+
     response.set_cookie(
         key="refresh_token",
         value=str(refresh_token),
@@ -142,6 +149,7 @@ def set_auth_cookies(response: Response, *, access_token: str, refresh_token: st
         path="/api/auth/refresh",
         max_age=auth.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
     )
+
     response.set_cookie(
         key="csrf_token",
         value=str(csrf),
@@ -151,6 +159,7 @@ def set_auth_cookies(response: Response, *, access_token: str, refresh_token: st
         path="/",
         max_age=auth.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
     )
+
 
 
 def clear_auth_cookies(response: Response) -> None:

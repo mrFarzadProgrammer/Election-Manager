@@ -1,17 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { CandidateData, Plan, Announcement } from '../../types';
-import { Save, Share, Users, MapPin, Link as LinkIcon, Instagram, Send, ExternalLink, Bot, CreditCard, Megaphone } from 'lucide-react';
+import { CandidateData, Announcement } from '../../types';
+import { Save, Share, Users, MapPin, Link as LinkIcon, Instagram, Send, ExternalLink, Bot, Megaphone } from 'lucide-react';
 import BotPreview from '../BotPreview';
 import QuotesCarousel from '../QuotesCarousel';
 
 interface InfoStatsTabProps {
     candidate: CandidateData;
     onUpdate: (updatedData: Partial<CandidateData>) => Promise<void>;
-    plans: Plan[];
     announcements: Announcement[];
 }
 
-const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate, plans, announcements }) => {
+const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate, announcements }) => {
     const [formData, setFormData] = useState<CandidateData>(candidate);
     const [socials, setSocials] = useState<{ telegram_channel?: string; telegram_group?: string; instagram?: string }>(
         candidate.socials || {}
@@ -22,7 +21,6 @@ const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate, plans,
         setSocials(candidate.socials || {});
     }, [candidate]);
 
-    const activePlan = plans.find(p => p.id.toString() === candidate.active_plan_id?.toString());
     const recentAnnouncements = announcements.slice(0, 2);
 
     const handleChange = (field: keyof CandidateData, value: string) => {
@@ -55,7 +53,7 @@ const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate, plans,
                 </div>
 
                 {/* Stats Row */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2 shrink-0">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 shrink-0">
                     {/* Fan Count */}
                     <div className="bg-blue-600 text-white p-3 rounded-2xl shadow-sm flex items-center justify-between relative overflow-hidden h-24">
                         <div className="relative z-10 flex flex-col justify-between h-full">
@@ -68,21 +66,6 @@ const InfoStatsTab: React.FC<InfoStatsTabProps> = ({ candidate, onUpdate, plans,
                         <div className="absolute -left-6 -bottom-6 text-white/10">
                             <Users size={80} />
                         </div>
-                    </div>
-
-                    {/* Active Plan */}
-                    <div className="bg-white p-3 rounded-2xl shadow-sm border flex flex-col justify-between h-24 relative overflow-hidden">
-                        <div className="flex justify-between items-start">
-                            <p className="text-gray-400 text-[10px]">پلن فعال</p>
-                            <CreditCard size={16} className="text-gray-300" />
-                        </div>
-                        <div>
-                            <p className="font-bold text-gray-800 text-sm truncate">{activePlan?.title || 'بدون پلن'}</p>
-                            <p className="text-[10px] text-gray-400 mt-1">
-                                {candidate.plan_expires_at ? `انقضا: ${new Date(candidate.plan_expires_at).toLocaleDateString('fa-IR')}` : 'نامحدود'}
-                            </p>
-                        </div>
-                        {activePlan && <div className="absolute bottom-0 left-0 right-0 h-1" style={{ backgroundColor: activePlan.color }}></div>}
                     </div>
 
                     {/* Recent Announcement */}

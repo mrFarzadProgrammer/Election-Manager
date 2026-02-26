@@ -64,9 +64,9 @@ const TicketsTab: React.FC<TicketsTabProps> = ({ tickets, onReply, onCloseTicket
 
     const getFullUrl = (url?: string) => {
         if (!url) return undefined;
-        if (url.startsWith('http')) return url;
-        const baseUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:8002";
-        return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+        if (/^https?:\/\//i.test(url)) return url;
+        // Same-origin relative path (works behind Nginx proxy and Vite dev proxy).
+        return url.startsWith('/') ? url : `/${url}`;
     };
 
     return (

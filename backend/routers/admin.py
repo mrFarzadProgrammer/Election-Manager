@@ -53,6 +53,24 @@ def admin_update_bot_request(
     return item
 
 
+@router.delete("/api/admin/bot-requests/{submission_id}")
+def admin_delete_bot_request(
+    submission_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_admin_user),
+):
+    item = (
+        db.query(models.BotSubmission)
+        .filter(models.BotSubmission.id == submission_id, models.BotSubmission.type == "BOT_REQUEST")
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="درخواست یافت نشد")
+    db.delete(item)
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("/api/admin/dashboard-stats", response_model=schemas.AdminDashboardStats)
 def admin_dashboard_stats(
     db: Session = Depends(database.get_db),

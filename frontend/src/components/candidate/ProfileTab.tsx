@@ -9,6 +9,17 @@ interface ProfileTabProps {
 }
 
 const ProfileTab: React.FC<ProfileTabProps> = ({ formData, handleChange, onSave }) => {
+    const normalizeSlogan = (raw: string) => {
+        const lines = (raw || '')
+            .replace(/\r\n/g, '\n')
+            .split('\n')
+            .map((x) => x.trim())
+            .filter(Boolean);
+        return lines.join('\n');
+    };
+
+    const sloganPreviewLines = normalizeSlogan(formData.slogan || '').split('\n').filter(Boolean);
+
     return (
         <div className='space-y-6'>
             <div className='bg-white p-6 rounded-2xl shadow-sm border'>
@@ -16,7 +27,24 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, handleChange, onSave 
                 <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
                     <div className='flex flex-col gap-2'><label className='text-sm font-medium'>نام</label><input value={formData.name} onChange={(e) => handleChange('name', e.target.value)} className='border rounded-xl px-4 py-2' /></div>
                     <div className='flex flex-col gap-2'><label className='text-sm font-medium'>نام کاربری</label><input value={formData.username} disabled className='border rounded-xl px-4 py-2 bg-gray-100' /></div>
-                    <div className='flex flex-col gap-2'><label className='text-sm font-medium'>شعار</label><input value={formData.slogan || ''} onChange={(e) => handleChange('slogan', e.target.value)} className='border rounded-xl px-4 py-2' /></div>
+                    <div className='flex flex-col gap-2 md:col-span-2'>
+                        <label className='text-sm font-medium'>شعار</label>
+                        <textarea
+                            value={formData.slogan || ''}
+                            onChange={(e) => handleChange('slogan', e.target.value)}
+                            className='border rounded-xl px-4 py-2 resize-none h-24'
+                            placeholder='هر خط یک شعار جداست (Enter برای خط جدید)'
+                        />
+                        {sloganPreviewLines.length > 0 && (
+                            <div className='flex flex-wrap gap-2'>
+                                {sloganPreviewLines.map((line, idx) => (
+                                    <span key={idx} className='inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-100'>
+                                        «{line}»
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
             <div className='bg-white p-6 rounded-2xl shadow-sm border'>

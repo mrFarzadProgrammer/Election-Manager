@@ -1,10 +1,59 @@
 # models.py
 import uuid
 
+import json
+import re
+
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
+from sqlalchemy.types import TEXT, TypeDecorator
 from database import Base
 from datetime import datetime
+
+
+class LooseJSON(TypeDecorator):
+    """A tolerant JSON column type.
+
+    Some legacy rows may contain invalid JSON due to unescaped Windows backslashes
+    (e.g., "C:\\Users\\...") or sequences like "\\uploads" that break "\\u" escapes.
+    This type attempts a best-effort repair on read, returning None when parsing
+    is still impossible.
+    """
+
+    impl = TEXT
+    cache_ok = True
+
+    @staticmethod
+    def _repair_suspicious_backslashes(text: str) -> str:
+        if not text:
+            return text
+        # "\u" is only valid if followed by 4 hex digits.
+        fixed = re.sub(r"\\u(?![0-9a-fA-F]{4})", r"\\\\u", text)
+        # Any other backslash must start a valid JSON escape sequence.
+        fixed = re.sub(r"\\(?![\"\\/bfnrtu])", r"\\\\", fixed)
+        return fixed
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        # Keep JSON stored as text for SQLite compatibility.
+        return json.dumps(value, ensure_ascii=False)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return value
+        s = str(value)
+        if not s.strip():
+            return None
+        try:
+            return json.loads(s)
+        except Exception:
+            try:
+                return json.loads(self._repair_suspicious_backslashes(s))
+            except Exception:
+                return None
 
 class User(Base):
     __tablename__ = "users"
@@ -32,8 +81,8 @@ class User(Base):
     ideas = Column(String, nullable=True)
     address = Column(String, nullable=True)
     voice_url = Column(String, nullable=True)
-    socials = Column(JSON, nullable=True)
-    bot_config = Column(JSON, nullable=True)
+    socials = Column(LooseJSON, nullable=True)
+    bot_config = Column(LooseJSON, nullable=True)
     vote_count = Column(Integer, default=0)
     created_at_jalali = Column(String, nullable=True)
 
@@ -57,7 +106,7 @@ class Plan(Base):
     title = Column(String)
     price = Column(String, nullable=True)
     description = Column(String)
-    features = Column(JSON, nullable=True)
+    features = Column(LooseJSON, nullable=True)
     color = Column(String, default="#3b82f6")
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True) # Changed from candidate_id
     is_visible = Column(Boolean, default=True)
@@ -318,7 +367,7 @@ class Announcement(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
     content = Column(String)
-    attachments = Column(JSON, nullable=True) # List of {url, type}
+    attachments = Column(LooseJSON, nullable=True) # List of {url, type}
     created_at = Column(DateTime, default=datetime.utcnow)
     created_at_jalali = Column(String, nullable=True)
 
@@ -398,7 +447,7 @@ class AdminExportLog(Base):
     admin_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     export_type = Column(String, nullable=True)
-    filters = Column(JSON, nullable=True)
+    filters = Column(LooseJSON, nullable=True)
 
 
 class TechnicalErrorLog(Base):

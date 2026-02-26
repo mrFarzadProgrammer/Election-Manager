@@ -15,6 +15,7 @@ from starlette.types import Scope
 
 import database
 import models
+import auth
 from db_maintenance import ensure_indexes
 from routers._common import APP_ENV
 from routers import (
@@ -197,9 +198,17 @@ os.makedirs(UPLOAD_PRIVATE_DIR, exist_ok=True)
 _cors_allow_origins: list[str]
 _cors_allow_origin_regex: str | None
 
+# if APP_ENV in {"production", "prod"}:
+#     _cors_allow_origins = [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()]
+#     _cors_allow_origin_regex = None
 if APP_ENV in {"production", "prod"}:
-    _cors_allow_origins = [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()]
+    _cors_allow_origins = [
+        o.strip()
+        for o in (os.getenv("CORS_ALLOW_ORIGINS") or "http://82.22.175.118").split(",")
+        if o.strip()
+    ]
     _cors_allow_origin_regex = None
+
 else:
     _cors_allow_origins = [
         "http://localhost:5173",
@@ -310,7 +319,28 @@ async def csrf_cookie_middleware(request: Request, call_next):
     try:
         method = (request.method or "").upper()
         if method in {"GET", "HEAD", "OPTIONS"}:
-            return await call_next(request)
+            response = await call_next(request)
+
+            # Backward compatibility: older sessions may have access_token cookies but no csrf_token cookie yet.
+            # Mint one on the next safe request so subsequent POST/PUT/PATCH/DELETE calls can pass CSRF.
+            try:
+                has_cookie_session = bool((request.cookies.get("access_token") or "").strip())
+                has_csrf_cookie = bool((request.cookies.get("csrf_token") or "").strip())
+                if has_cookie_session and not has_csrf_cookie:
+                    secure = _env_truthy("COOKIE_SECURE")
+                    response.set_cookie(
+                        key="csrf_token",
+                        value=uuid.uuid4().hex,
+                        httponly=False,
+                        secure=secure,
+                        samesite="lax",
+                        path="/",
+                        max_age=auth.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+                    )
+            except Exception:
+                pass
+
+            return response
 
         path = request.url.path if request.url else ""
         if path.startswith("/api/auth/"):

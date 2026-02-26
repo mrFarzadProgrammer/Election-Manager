@@ -257,6 +257,10 @@ class FeedbackSubmissionUpdate(BaseModel):
     status: Optional[str] = None  # NEW | REVIEWED
 
 
+class FeedbackSubmissionAnswer(BaseModel):
+    answer_text: str
+
+
 class FeedbackSubmission(BaseModel):
     id: int
     candidate_id: int
@@ -265,6 +269,9 @@ class FeedbackSubmission(BaseModel):
     constituency: Optional[str] = None
     status: str
     tag: Optional[str] = None
+    answer: Optional[str] = None
+    answered_at: Optional[datetime] = None
+    is_public: bool = False
 
     class Config:
         from_attributes = True

@@ -11,6 +11,15 @@ interface MyProgramsTabProps {
 const MyProgramsTab: React.FC<MyProgramsTabProps> = ({ candidate, onUpdate }) => {
     const [formData, setFormData] = useState<CandidateData>(candidate);
 
+    const normalizeSlogan = (raw: string) => {
+        const lines = (raw || '')
+            .replace(/\r\n/g, '\n')
+            .split('\n')
+            .map((x) => x.trim())
+            .filter(Boolean);
+        return lines.join('\n');
+    };
+
     useEffect(() => {
         setFormData(candidate);
     }, [candidate]);
@@ -39,13 +48,23 @@ const MyProgramsTab: React.FC<MyProgramsTabProps> = ({ candidate, onUpdate }) =>
                     {/* Slogan Section */}
                     <div className="mb-6">
                         <label className="block text-xs font-medium text-gray-500 mb-2 text-right">شعار انتخاباتی</label>
-                        <input
-                            type="text"
+                        <textarea
                             value={formData.slogan || ''}
                             onChange={(e) => handleChange('slogan', e.target.value)}
-                            className="w-full p-4 bg-blue-50/50 border border-blue-100 rounded-xl text-center text-blue-800 font-bold text-lg focus:outline-none focus:ring-2 focus:ring-blue-200 transition-all placeholder-blue-300"
-                            placeholder="شعار انتخاباتی خود را وارد کنید..."
+                            className="w-full p-4 bg-blue-50/50 border border-blue-100 rounded-xl text-center text-blue-800 font-bold text-lg focus:outline-none focus:ring-2 focus:ring-blue-200 transition-all placeholder-blue-300 resize-none h-28"
+                            placeholder="هر خط یک شعار جداست (Enter برای خط جدید)"
                         />
+                        {normalizeSlogan(formData.slogan || '') ? (
+                            <div className="mt-3 flex flex-wrap gap-2 justify-center">
+                                {normalizeSlogan(formData.slogan || '')
+                                    .split('\n')
+                                    .map((line, idx) => (
+                                        <span key={idx} className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-white/70 text-blue-800 border border-blue-100">
+                                            «{line}»
+                                        </span>
+                                    ))}
+                            </div>
+                        ) : null}
                     </div>
 
                     {/* Resume Section */}

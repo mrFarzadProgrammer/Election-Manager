@@ -25,7 +25,8 @@ const toFaDateTime = (iso: string | null | undefined) => {
 
 const statusMeta = (status: QuestionSubmission['status']) => {
     const s = String(status || '').toUpperCase();
-    if (s === 'ANSWERED') return { label: 'پاسخ داده شد', cls: 'bg-green-50 text-green-700 border-green-200' };
+    // Keep palette aligned with "نظرات و دغدغه‌ها" (blue/amber/rose) and avoid green.
+    if (s === 'ANSWERED') return { label: 'پاسخ داده شد', cls: 'bg-blue-50 text-blue-700 border-blue-200' };
     if (s === 'REJECTED') return { label: 'رد شد', cls: 'bg-rose-50 text-rose-700 border-rose-200' };
     return { label: 'در انتظار', cls: 'bg-amber-50 text-amber-700 border-amber-200' };
 };
@@ -194,7 +195,7 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
                     </div>
                     <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
                         <div className="text-xs text-gray-500">پاسخ داده شد</div>
-                        <div className="text-lg font-bold text-green-700 mt-1">{counts.answered}</div>
+                        <div className="text-lg font-bold text-blue-700 mt-1">{counts.answered}</div>
                     </div>
                     <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4">
                         <div className="text-xs text-gray-500">رد شد</div>
@@ -268,7 +269,7 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
                                                         onClick={() => setDraftFeatured((prev) => ({ ...prev, [q.id]: !featuredValue }))}
                                                         disabled={isSaving}
                                                         className={`w-full px-3 py-2 rounded-2xl border text-sm transition ${featuredValue
-                                                            ? 'bg-green-50 border-green-200 text-green-700'
+                                                            ? 'bg-blue-50 border-blue-200 text-blue-700'
                                                             : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
                                                             }`}
                                                         title="سؤال‌های منتخب در بخش پرتکرار بات نمایش داده می‌شوند"
@@ -280,7 +281,7 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
 
                                             {isAnswered && (
                                                 <div className="mt-4 bg-white border border-gray-200 rounded-2xl p-3">
-                                                    <div className="text-xs font-bold text-gray-600 mb-2">پاسخ رسمی (Immutable)</div>
+                                                    <div className="text-xs font-bold text-gray-600 mb-2">پاسخ رسمی (غیرقابل تغییر)</div>
                                                     <div className="text-sm text-gray-800 whitespace-pre-wrap break-words">{q.answer_text || '—'}</div>
                                                 </div>
                                             )}
@@ -306,13 +307,13 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
                                             )}
                                         </div>
 
-                                        <div className="w-full sm:w-auto flex flex-row sm:flex-col gap-2 items-stretch sm:items-end">
+                                        <div className="w-full flex flex-row flex-wrap gap-2 items-stretch justify-end">
                                             {!isAnswered && !isRejected ? (
                                                 <>
                                                     <button
                                                         onClick={() => void answerOne(q.id)}
                                                         disabled={isSaving}
-                                                        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-green-600 text-white hover:bg-green-700 transition disabled:bg-gray-300 disabled:text-gray-700"
+                                                        className="inline-flex flex-1 sm:flex-none items-center justify-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition disabled:bg-gray-300 disabled:text-gray-700"
                                                     >
                                                         <CheckCircle2 size={16} />
                                                         {isSaving ? 'در حال ثبت...' : 'ثبت پاسخ'}
@@ -320,7 +321,7 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
                                                     <button
                                                         onClick={() => void rejectOne(q.id)}
                                                         disabled={isSaving}
-                                                        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-rose-600 text-white hover:bg-rose-700 transition disabled:bg-gray-300 disabled:text-gray-700"
+                                                        className="inline-flex flex-1 sm:flex-none items-center justify-center gap-2 px-4 py-2 rounded-xl bg-rose-600 text-white hover:bg-rose-700 transition disabled:bg-gray-300 disabled:text-gray-700"
                                                         title="بدون ارسال پیام به کاربر"
                                                     >
                                                         <XCircle size={16} />
@@ -331,7 +332,7 @@ const PublicQuestionsV1: React.FC<PublicQuestionsV1Props> = ({ candidate }) => {
                                                 <button
                                                     onClick={() => void saveMeta(q.id)}
                                                     disabled={isSaving}
-                                                    className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gray-800 text-white hover:bg-gray-900 transition disabled:bg-gray-300 disabled:text-gray-700"
+                                                    className="inline-flex flex-1 sm:flex-none items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gray-800 text-white hover:bg-gray-900 transition disabled:bg-gray-300 disabled:text-gray-700"
                                                     title="پاسخ رسمی تغییر نمی‌کند؛ فقط دسته‌بندی/منتخب بودن ذخیره می‌شود"
                                                 >
                                                     <Lock size={16} />

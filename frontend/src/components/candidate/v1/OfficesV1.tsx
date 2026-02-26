@@ -11,7 +11,10 @@ interface OfficesV1Props {
 type Office = {
     title: string;
     address: string;
-    note?: string;
+    manager?: string;
+    phone?: string;
+    details?: string;
+    status?: string;
 };
 
 const MAX_OFFICES = 3;
@@ -26,7 +29,10 @@ const readOffices = (candidate: CandidateData): Office[] => {
         .map((o: any) => ({
             title: String(o?.title || '').trim(),
             address: String(o?.address || '').trim(),
-            note: String(o?.note || '').trim(),
+            manager: String(o?.manager || '').trim(),
+            phone: String(o?.phone || '').trim(),
+            details: String((o?.details ?? o?.note) || '').trim(),
+            status: String(o?.status || '').trim(),
         }));
 };
 
@@ -55,7 +61,7 @@ const OfficesV1: React.FC<OfficesV1Props> = ({ candidate, onUpdate }) => {
             return;
         }
         setIsDirty(true);
-        setOffices((prev) => [...prev, { title: '', address: '', note: '' }]);
+        setOffices((prev) => [...prev, { title: '', address: '', manager: '', phone: '', details: '', status: 'فعال' }]);
     };
 
     const removeOffice = (idx: number) => {
@@ -87,7 +93,10 @@ const OfficesV1: React.FC<OfficesV1Props> = ({ candidate, onUpdate }) => {
             const normalized = offices.map((o) => ({
                 title: o.title.trim(),
                 address: o.address.trim(),
-                note: (o.note || '').trim(),
+                manager: (o.manager || '').trim(),
+                phone: (o.phone || '').trim(),
+                details: (o.details || '').trim(),
+                status: (o.status || '').trim(),
             }));
 
             const bot_config = {
@@ -169,13 +178,48 @@ const OfficesV1: React.FC<OfficesV1Props> = ({ candidate, onUpdate }) => {
                                         />
                                     </div>
 
-                                    <div className="flex flex-col gap-2 md:col-span-2">
-                                        <label className="text-sm font-medium">توضیح کوتاه (ساعات / محله)</label>
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-sm font-medium">مسئول ستاد</label>
                                         <input
-                                            value={office.note || ''}
-                                            onChange={(e) => updateOffice(idx, { note: e.target.value })}
+                                            value={office.manager || ''}
+                                            onChange={(e) => updateOffice(idx, { manager: e.target.value })}
                                             className="border rounded-xl px-4 py-2 bg-white"
-                                            placeholder="مثلاً: ۹ تا ۱۸ / محله ..."
+                                            placeholder="نام مسئول ستاد"
+                                        />
+                                    </div>
+
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-sm font-medium">شماره تماس</label>
+                                        <input
+                                            value={office.phone || ''}
+                                            onChange={(e) => updateOffice(idx, { phone: e.target.value })}
+                                            className="border rounded-xl px-4 py-2 bg-white"
+                                            placeholder="مثلاً: 0912..."
+                                            inputMode="tel"
+                                        />
+                                    </div>
+
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-sm font-medium">وضعیت ستاد</label>
+                                        <select
+                                            value={office.status || ''}
+                                            onChange={(e) => updateOffice(idx, { status: e.target.value })}
+                                            className="border rounded-xl px-4 py-2 bg-white"
+                                        >
+                                            <option value="">—</option>
+                                            <option value="فعال">فعال</option>
+                                            <option value="غیرفعال">غیرفعال</option>
+                                            <option value="در حال راه‌اندازی">در حال راه‌اندازی</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="flex flex-col gap-2 md:col-span-2">
+                                        <label className="text-sm font-medium">توضیحات تکمیلی</label>
+                                        <textarea
+                                            value={office.details || ''}
+                                            onChange={(e) => updateOffice(idx, { details: e.target.value })}
+                                            className="border rounded-xl px-4 py-2 bg-white min-h-[88px]"
+                                            placeholder="مثلاً: ساعت پاسخ‌گویی / محدوده پوشش / نکات مراجعه"
                                         />
                                     </div>
                                 </div>
