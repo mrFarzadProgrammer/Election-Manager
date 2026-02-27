@@ -276,8 +276,8 @@ export interface GlobalBotUserItem {
     platform: string;
     representative_id: number;
     bot_id?: string | null;
-    first_interaction_at: string;
-    last_interaction_at: string;
+    first_interaction_at: string | null;
+    last_interaction_at: string | null;
     total_interactions: number;
     asked_question: boolean;
     left_comment: boolean;

@@ -316,53 +316,54 @@ async def security_headers_middleware(request: Request, call_next):
 @app.middleware("http")
 async def csrf_cookie_middleware(request: Request, call_next):
     """CSRF protection for cookie-authenticated browser sessions."""
+    method = (request.method or "").upper()
+    if method in {"GET", "HEAD", "OPTIONS"}:
+        response = await call_next(request)
+
+        # Backward compatibility: older sessions may have access_token cookies but no csrf_token cookie yet.
+        # Mint one on the next safe request so subsequent POST/PUT/PATCH/DELETE calls can pass CSRF.
+        try:
+            has_cookie_session = bool((request.cookies.get("access_token") or "").strip())
+            has_csrf_cookie = bool((request.cookies.get("csrf_token") or "").strip())
+            if has_cookie_session and not has_csrf_cookie:
+                secure = _env_truthy("COOKIE_SECURE")
+                response.set_cookie(
+                    key="csrf_token",
+                    value=uuid.uuid4().hex,
+                    httponly=False,
+                    secure=secure,
+                    samesite="lax",
+                    path="/",
+                    max_age=auth.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+                )
+        except Exception:
+            pass
+
+        return response
+
+    path = request.url.path if request.url else ""
+    if path.startswith("/api/auth/"):
+        return await call_next(request)
+
+    has_authz = bool((request.headers.get("authorization") or "").strip())
+    has_cookie_session = bool((request.cookies.get("access_token") or "").strip())
+    if has_authz or not has_cookie_session:
+        return await call_next(request)
+
     try:
-        method = (request.method or "").upper()
-        if method in {"GET", "HEAD", "OPTIONS"}:
-            response = await call_next(request)
-
-            # Backward compatibility: older sessions may have access_token cookies but no csrf_token cookie yet.
-            # Mint one on the next safe request so subsequent POST/PUT/PATCH/DELETE calls can pass CSRF.
-            try:
-                has_cookie_session = bool((request.cookies.get("access_token") or "").strip())
-                has_csrf_cookie = bool((request.cookies.get("csrf_token") or "").strip())
-                if has_cookie_session and not has_csrf_cookie:
-                    secure = _env_truthy("COOKIE_SECURE")
-                    response.set_cookie(
-                        key="csrf_token",
-                        value=uuid.uuid4().hex,
-                        httponly=False,
-                        secure=secure,
-                        samesite="lax",
-                        path="/",
-                        max_age=auth.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-                    )
-            except Exception:
-                pass
-
-            return response
-
-        path = request.url.path if request.url else ""
-        if path.startswith("/api/auth/"):
-            return await call_next(request)
-
-        has_authz = bool((request.headers.get("authorization") or "").strip())
-        has_cookie_session = bool((request.cookies.get("access_token") or "").strip())
-        if has_authz or not has_cookie_session:
-            return await call_next(request)
-
         csrf_cookie = (request.cookies.get("csrf_token") or "").strip()
         csrf_header = (request.headers.get("x-csrf-token") or "").strip()
-        if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:
-            return Response(
-                content="{\"detail\":\"CSRF token missing/invalid\"}",
-                status_code=403,
-                media_type="application/json",
-            )
     except Exception:
         return Response(
-            content="{\"detail\":\"CSRF middleware error\"}",
-            status_code=500,
+            content="{\"detail\":\"CSRF token missing/invalid\"}",
+            status_code=403,
+            media_type="application/json",
+        )
+
+    if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:
+        return Response(
+            content="{\"detail\":\"CSRF token missing/invalid\"}",
+            status_code=403,
             media_type="application/json",
         )
 

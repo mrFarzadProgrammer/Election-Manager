@@ -21,6 +21,55 @@ from utils.cache import cache_get_json, cache_set_json
 router = APIRouter(tags=["admin-mvp"])
 
 
+def _normalize_digits(value: str) -> str:
+    # Support Persian/Arabic-Indic digits in query params.
+    trans = str.maketrans(
+        {
+            "۰": "0",
+            "۱": "1",
+            "۲": "2",
+            "۳": "3",
+            "۴": "4",
+            "۵": "5",
+            "۶": "6",
+            "۷": "7",
+            "۸": "8",
+            "۹": "9",
+            "٠": "0",
+            "١": "1",
+            "٢": "2",
+            "٣": "3",
+            "٤": "4",
+            "٥": "5",
+            "٦": "6",
+            "٧": "7",
+            "٨": "8",
+            "٩": "9",
+        }
+    )
+    return str(value).translate(trans)
+
+
+def _jalali_to_gregorian_ymd(date_part: str) -> str | None:
+    # Accept YYYY/MM/DD (Jalali) and return YYYY-MM-DD (Gregorian).
+    try:
+        import jdatetime  # type: ignore
+
+        raw = _normalize_digits(date_part).strip()
+        if not raw:
+            return None
+        parts = [p for p in raw.split("/") if p.strip()]
+        if len(parts) != 3:
+            return None
+        jy, jm, jd = (int(parts[0]), int(parts[1]), int(parts[2]))
+        if jy < 1000:
+            return None
+        g = jdatetime.date(jy, jm, jd).togregorian()
+        return g.strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
 def _overview_counts_bulk(db: Session, *, candidate_ids: list[int]) -> tuple[schemas.MvpOverviewCounters, dict[int, schemas.MvpOverviewCounters]]:
     """Compute global + per-candidate counters using aggregated queries.
 
@@ -152,12 +201,32 @@ def _parse_iso_dt(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        s = str(value).strip()
+        s = _normalize_digits(str(value)).strip()
         if not s:
             return None
-        if "T" not in s:
-            return datetime.fromisoformat(s + "T00:00:00")
-        return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+
+        # Split datetime if present.
+        date_part, time_part = (s.split("T", 1) + [""])[:2] if "T" in s else (s, "")
+        date_part = date_part.strip()
+        time_part = time_part.strip()
+
+        # Accept Jalali YYYY/MM/DD
+        if "/" in date_part:
+            # Heuristic: years < 1700 are treated as Jalali.
+            try:
+                y = int(date_part.split("/", 1)[0])
+            except Exception:
+                y = 0
+            if 1200 <= y <= 1600:
+                g_ymd = _jalali_to_gregorian_ymd(date_part)
+                if g_ymd:
+                    date_part = g_ymd
+            else:
+                # Gregorian but with slashes
+                date_part = date_part.replace("/", "-")
+
+        dt_str = f"{date_part}T{time_part or '00:00:00'}"
+        return datetime.fromisoformat(dt_str.replace("Z", "+00:00")).replace(tzinfo=None)
     except Exception:
         return None
 
@@ -253,7 +322,7 @@ def admin_mvp_flow_paths(
     return schemas.FlowPathsResponse(candidate_id=candidate_id, items=items)
 
 
-@router.get("/api/admin/mvp/questions", response_model=list[schemas.QuestionLearningItem])
+@router.get("/api/admin/mvp/questions", response_model=list[schemas.QuestionLearningItem], response_model_by_alias=False)
 def admin_mvp_questions(
     candidate_id: int | None = None,
     status: str | None = None,
@@ -268,7 +337,11 @@ def admin_mvp_questions(
     return q.order_by(models.BotSubmission.id.desc()).all()
 
 
-@router.get("/api/admin/mvp/commitments", response_model=list[schemas.CommitmentLearningItem])
+@router.get(
+    "/api/admin/mvp/commitments",
+    response_model=list[schemas.CommitmentLearningItem],
+    response_model_by_alias=False,
+)
 def admin_mvp_commitments(
     candidate_id: int | None = None,
     db: Session = Depends(database.get_db),
@@ -280,7 +353,7 @@ def admin_mvp_commitments(
     return q.order_by(models.BotCommitment.id.desc()).all()
 
 
-@router.get("/api/admin/mvp/leads", response_model=list[schemas.LeadItem])
+@router.get("/api/admin/mvp/leads", response_model=list[schemas.LeadItem], response_model_by_alias=False)
 def admin_mvp_leads(
     candidate_id: int | None = None,
     db: Session = Depends(database.get_db),
@@ -292,7 +365,7 @@ def admin_mvp_leads(
     return q.order_by(models.BotSubmission.id.desc()).all()
 
 
-@router.get("/api/admin/mvp/ux-logs", response_model=list[schemas.UxLogItem])
+@router.get("/api/admin/mvp/ux-logs", response_model=list[schemas.UxLogItem], response_model_by_alias=False)
 def admin_mvp_ux_logs(
     candidate_id: int | None = None,
     action: str | None = None,
@@ -309,7 +382,11 @@ def admin_mvp_ux_logs(
     return q.order_by(models.BotUxLog.id.desc()).limit(limit).all()
 
 
-@router.get("/api/admin/mvp/global-users", response_model=list[schemas.GlobalBotUserItem])
+@router.get(
+    "/api/admin/mvp/global-users",
+    response_model=list[schemas.GlobalBotUserItem],
+    response_model_by_alias=False,
+)
 def admin_mvp_global_users(
     representative_id: int | None = None,
     start_date: str | None = None,

@@ -1,5 +1,5 @@
 # schemas.py
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
 
@@ -418,8 +418,8 @@ class GlobalBotUserItem(BaseModel):
     representative_id: int = Field(..., alias="candidate_id")
     bot_id: Optional[str] = Field(None, alias="candidate_bot_name")
 
-    first_interaction_at: datetime = Field(..., alias="first_seen_at")
-    last_interaction_at: datetime = Field(..., alias="last_seen_at")
+    first_interaction_at: Optional[datetime] = Field(None, alias="first_seen_at")
+    last_interaction_at: Optional[datetime] = Field(None, alias="last_seen_at")
     total_interactions: int = 0
 
     asked_question: bool = False
@@ -431,6 +431,15 @@ class GlobalBotUserItem(BaseModel):
     class Config:
         from_attributes = True
         populate_by_name = True
+
+    @field_validator("platform", mode="before")
+    @classmethod
+    def _normalize_platform(cls, v):
+        # Legacy rows may have NULL platform. Keep API stable by normalizing to TELEGRAM.
+        if v is None:
+            return "TELEGRAM"
+        s = str(v).strip()
+        return s or "TELEGRAM"
 
 
 # --- Monitoring (Minimal & Learning-Focused) ---

@@ -87,12 +87,16 @@ def register(request: RegisterRequest, req: Request, response: Response, db: Ses
 @router.post("/api/auth/login", response_model=TokenResponse)
 def login(request: LoginRequest, req: Request, response: Response, db: Session = Depends(database.get_db)):
     rate_limit(req, key="auth:login", limit=20, window_seconds=60)
-    user = auth.authenticate_user(db, request.username, request.password)
+    username = (request.username or "").strip()
+    password = (request.password or "").strip()
+
+    db_user = db.query(models.User).filter(models.User.username == username).first()
+    if db_user and not db_user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="کاربر غیرفعال است")
+
+    user = auth.authenticate_user(db, username, password)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="نام کاربری یا رمز عبور اشتباه است",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="نام کاربری یا رمز عبور اشتباه است")
     tokens = auth.create_tokens(user.username)
     try:
         set_auth_cookies(response, access_token=tokens["access_token"], refresh_token=tokens["refresh_token"])

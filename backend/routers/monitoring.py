@@ -21,12 +21,59 @@ def _parse_iso_dt(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        s = str(value).strip()
+        trans = str.maketrans(
+            {
+                "۰": "0",
+                "۱": "1",
+                "۲": "2",
+                "۳": "3",
+                "۴": "4",
+                "۵": "5",
+                "۶": "6",
+                "۷": "7",
+                "۸": "8",
+                "۹": "9",
+                "٠": "0",
+                "١": "1",
+                "٢": "2",
+                "٣": "3",
+                "٤": "4",
+                "٥": "5",
+                "٦": "6",
+                "٧": "7",
+                "٨": "8",
+                "٩": "9",
+            }
+        )
+        s = str(value).translate(trans).strip()
         if not s:
             return None
-        if "T" not in s:
-            return datetime.fromisoformat(s + "T00:00:00")
-        return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+
+        date_part, time_part = (s.split("T", 1) + [""])[:2] if "T" in s else (s, "")
+        date_part = date_part.strip()
+        time_part = time_part.strip()
+
+        if "/" in date_part:
+            try:
+                y = int(date_part.split("/", 1)[0])
+            except Exception:
+                y = 0
+
+            if 1200 <= y <= 1600:
+                try:
+                    import jdatetime  # type: ignore
+
+                    parts = [p for p in date_part.split("/") if p.strip()]
+                    if len(parts) == 3:
+                        g = jdatetime.date(int(parts[0]), int(parts[1]), int(parts[2])).togregorian()
+                        date_part = g.strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            else:
+                date_part = date_part.replace("/", "-")
+
+        dt_str = f"{date_part}T{time_part or '00:00:00'}"
+        return datetime.fromisoformat(dt_str.replace("Z", "+00:00")).replace(tzinfo=None)
     except Exception:
         return None
 
@@ -39,7 +86,11 @@ def _log_export_action(db: Session, *, admin_id: int, export_type: str, filters:
         db.rollback()
 
 
-@router.get("/api/admin/monitoring/errors", response_model=list[schemas.TechnicalErrorItem])
+@router.get(
+    "/api/admin/monitoring/errors",
+    response_model=list[schemas.TechnicalErrorItem],
+    response_model_by_alias=False,
+)
 def admin_monitoring_errors(
     representative_id: int | None = None,
     start_date: str | None = None,
@@ -112,7 +163,11 @@ def admin_monitoring_errors_export_xlsx(
     )
 
 
-@router.get("/api/admin/monitoring/ux-logs", response_model=list[schemas.MonitoringUxLogItem])
+@router.get(
+    "/api/admin/monitoring/ux-logs",
+    response_model=list[schemas.MonitoringUxLogItem],
+    response_model_by_alias=False,
+)
 def admin_monitoring_ux_logs(
     representative_id: int | None = None,
     start_date: str | None = None,
@@ -189,7 +244,11 @@ def admin_monitoring_ux_logs_export_xlsx(
     )
 
 
-@router.get("/api/admin/monitoring/flow-drops", response_model=list[schemas.FlowDropItem])
+@router.get(
+    "/api/admin/monitoring/flow-drops",
+    response_model=list[schemas.FlowDropItem],
+    response_model_by_alias=False,
+)
 def admin_monitoring_flow_drops(
     representative_id: int | None = None,
     db: Session = Depends(database.get_db),
@@ -242,7 +301,11 @@ def admin_monitoring_flow_drops_export_xlsx(
     )
 
 
-@router.get("/api/admin/monitoring/health-checks", response_model=list[schemas.HealthCheckItem])
+@router.get(
+    "/api/admin/monitoring/health-checks",
+    response_model=list[schemas.HealthCheckItem],
+    response_model_by_alias=False,
+)
 def admin_monitoring_health_checks(
     representative_id: int | None = None,
     check_type: str | None = None,

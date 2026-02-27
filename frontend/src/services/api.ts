@@ -443,6 +443,79 @@ async function requestBlob(path: string, options: RequestInit = {}, _retried: bo
     return await res.blob();
 }
 
+const parseFilenameFromContentDisposition = (value: string | null): string => {
+    if (!value) return "";
+    const s = String(value);
+
+    // Try RFC 5987 filename* first: filename*=UTF-8''...
+    const star = s.match(/filename\*\s*=\s*([^']*)''([^;]+)/i);
+    if (star && star[2]) {
+        try {
+            return decodeURIComponent(star[2].trim());
+        } catch {
+            return star[2].trim();
+        }
+    }
+
+    const m = s.match(/filename\s*=\s*"?([^";]+)"?/i);
+    return (m?.[1] || "").trim();
+};
+
+async function requestBlobWithFilename(
+    path: string,
+    options: RequestInit = {},
+    _retried: boolean = false
+): Promise<{ blob: Blob; filename: string }> {
+    const url = toRequestUrl(path);
+
+    const normalizedHeaders = normalizeRequestHeaders(options.headers);
+    const headers = new Headers(normalizedHeaders as any);
+    maybeAttachCsrfHeader(headers, options.method || "GET");
+
+    const normalizedOptions: RequestInit = {
+        ...options,
+        credentials: options.credentials ?? "include",
+        headers,
+    };
+
+    let res: Response;
+    try {
+        res = await fetch(url, normalizedOptions);
+    } catch {
+        throw new Error("ارتباط با سرور برقرار نشد. لطفاً اتصال یا اجرای سرور را بررسی کنید.");
+    }
+
+    if (!res.ok) {
+        const isAuthPath = /^\/api\/auth\//.test(path);
+        if (res.status === 401 && !_retried && !isAuthPath) {
+            const hadAuthHeader = hasAuthorizationHeader(normalizedOptions.headers);
+            const refreshed = await refreshAccessToken();
+            if (refreshed?.access_token) {
+                if (hadAuthHeader) {
+                    const nextHeaders = setAuthorizationHeader(normalizedOptions.headers, `Bearer ${refreshed.access_token}`);
+                    return requestBlobWithFilename(path, { ...normalizedOptions, headers: nextHeaders }, true);
+                }
+                return requestBlobWithFilename(path, normalizedOptions, true);
+            }
+            if (hadAuthHeader) {
+                localStorage.removeItem("access_token");
+                localStorage.removeItem("refresh_token");
+            }
+            throw new Error("نشست شما منقضی شده است. لطفاً دوباره وارد شوید.");
+        }
+
+        const payload = await readBodySafely(res);
+        const fallback = `خطا در درخواست (${res.status})`;
+        const message = extractApiMessage(payload, fallback);
+        throw new Error(message);
+    }
+
+    const cd = res.headers.get("content-disposition");
+    const filename = parseFilenameFromContentDisposition(cd);
+    const blob = await res.blob();
+    return { blob, filename };
+}
+
 const mapCandidate = (c: any): Candidate => ({
     ...c,
     id: String(c.id),
@@ -766,14 +839,14 @@ export const api = {
             endDate?: string | null;
             interactionType?: "question" | "comment" | "lead" | null;
         } = {}
-    ): Promise<Blob> => {
+    ): Promise<{ blob: Blob; filename: string }> => {
         const params = new URLSearchParams();
         if (opts.representativeId != null) params.set("representative_id", String(opts.representativeId));
         if (opts.startDate) params.set("start_date", opts.startDate);
         if (opts.endDate) params.set("end_date", opts.endDate);
         if (opts.interactionType) params.set("interaction_type", opts.interactionType);
         const qs = params.toString() ? `?${params.toString()}` : "";
-        return requestBlob(`/api/admin/mvp/global-users/export.xlsx${qs}`, {
+        return requestBlobWithFilename(`/api/admin/mvp/global-users/export.xlsx${qs}`, {
             method: "GET",
             headers: {
                 Authorization: `Bearer ${token}`,

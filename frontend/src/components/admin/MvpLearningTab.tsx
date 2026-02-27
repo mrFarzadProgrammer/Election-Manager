@@ -23,6 +23,44 @@ const formatDateTime = (value?: string | null) => {
     return String(value).replace('T', ' ').replace('Z', '');
 };
 
+const formatJalaliDateTime = (value?: string | null) => {
+    if (!value) return '-';
+    try {
+        const d = new Date(String(value));
+        if (Number.isNaN(d.getTime())) return formatDateTime(value) || '-';
+        const fmt = new Intl.DateTimeFormat('fa-IR-u-ca-persian', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+            timeZone: 'Asia/Tehran',
+        });
+        return fmt.format(d);
+    } catch {
+        return formatDateTime(value) || '-';
+    }
+};
+
+const normalizeYmd = (value: string): string => {
+    return String(value || '').trim();
+};
+
+const toTelegramUsername = (value?: string | null): string => {
+    const s = String(value || '').trim();
+    if (!s) return '';
+    return s.startsWith('@') ? s : `@${s}`;
+};
+
+const toTelegramUsernameUrl = (value?: string | null): string => {
+    const s = String(value || '').trim();
+    const uname = s.startsWith('@') ? s.slice(1) : s;
+    if (!uname) return '';
+    return `https://t.me/${encodeURIComponent(uname)}`;
+};
+
 const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -59,6 +97,17 @@ const MvpLearningTab: React.FC = () => {
     const [globalInteractionType, setGlobalInteractionType] = useState<'' | 'question' | 'comment' | 'lead'>('');
     const [globalUsers, setGlobalUsers] = useState<LoadState<GlobalBotUserItem[]>>({ status: 'idle', data: null, error: null });
     const [isExporting, setIsExporting] = useState(false);
+    const [globalPage, setGlobalPage] = useState(1);
+    const globalPageSize = 50;
+
+    const clearGlobalFilters = () => {
+        setGlobalRepresentativeId(null);
+        setGlobalStartDate('');
+        setGlobalEndDate('');
+        setGlobalInteractionType('');
+        setGlobalUsers({ status: 'idle', data: null, error: null });
+        setGlobalPage(1);
+    };
 
     const candidates: CandidateOption[] = useMemo(() => {
         const items = overview.data?.per_candidate || [];
@@ -66,6 +115,12 @@ const MvpLearningTab: React.FC = () => {
             .map((c) => ({ id: c.candidate_id, name: c.name || `نماینده ${c.candidate_id}` }))
             .sort((a, b) => a.id - b.id);
     }, [overview.data]);
+
+    const candidateNameById = useMemo(() => {
+        const m = new Map<number, string>();
+        for (const c of candidates) m.set(Number(c.id), c.name);
+        return m;
+    }, [candidates]);
 
     const effectiveCandidateId = selectedCandidateId;
 
@@ -145,10 +200,14 @@ const MvpLearningTab: React.FC = () => {
     const loadGlobalUsers = async () => {
         try {
             setGlobalUsers({ status: 'loading', data: null, error: null });
+            setGlobalPage(1);
+
+            const sd = normalizeYmd(globalStartDate);
+            const ed = normalizeYmd(globalEndDate);
             const rows = await api.getAdminMvpGlobalUsers(token, {
                 representativeId: globalRepresentativeId,
-                startDate: globalStartDate ? `${globalStartDate}T00:00:00` : null,
-                endDate: globalEndDate ? `${globalEndDate}T23:59:59` : null,
+                startDate: sd ? `${sd}T00:00:00` : null,
+                endDate: ed ? `${ed}T23:59:59` : null,
                 interactionType: globalInteractionType || null,
                 limit: 1000,
             });
@@ -161,21 +220,31 @@ const MvpLearningTab: React.FC = () => {
     const exportGlobalUsers = async () => {
         try {
             setIsExporting(true);
-            const blob = await api.exportAdminMvpGlobalUsersXlsx(token, {
+            const sd = normalizeYmd(globalStartDate);
+            const ed = normalizeYmd(globalEndDate);
+            const res = await api.exportAdminMvpGlobalUsersXlsx(token, {
                 representativeId: globalRepresentativeId,
-                startDate: globalStartDate ? `${globalStartDate}T00:00:00` : null,
-                endDate: globalEndDate ? `${globalEndDate}T23:59:59` : null,
+                startDate: sd ? `${sd}T00:00:00` : null,
+                endDate: ed ? `${ed}T23:59:59` : null,
                 interactionType: globalInteractionType || null,
             });
-            const ts = new Date();
-            const filename = `global_users_${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')}.xlsx`;
-            downloadBlob(blob, filename);
+            const fallbackTs = new Date();
+            const fallbackFilename = `global_users_${fallbackTs.getFullYear()}${String(fallbackTs.getMonth() + 1).padStart(2, '0')}${String(fallbackTs.getDate()).padStart(2, '0')}_${String(fallbackTs.getHours()).padStart(2, '0')}${String(fallbackTs.getMinutes()).padStart(2, '0')}${String(fallbackTs.getSeconds()).padStart(2, '0')}.xlsx`;
+            downloadBlob(res.blob, res.filename || fallbackFilename);
         } catch (e: any) {
             alert(e?.message || 'خطا در خروجی اکسل');
         } finally {
             setIsExporting(false);
         }
     };
+
+    const globalUsersTotal = globalUsers.data?.length || 0;
+    const globalTotalPages = Math.max(1, Math.ceil(globalUsersTotal / globalPageSize));
+    const globalUsersPageRows = useMemo(() => {
+        const rows = globalUsers.data || [];
+        const start = (globalPage - 1) * globalPageSize;
+        return rows.slice(start, start + globalPageSize);
+    }, [globalUsers.data, globalPage]);
 
     const globalCounters = overview.data?.global_counters;
 
@@ -519,105 +588,200 @@ const MvpLearningTab: React.FC = () => {
 
             <div className="bg-white rounded-2xl border border-gray-100 p-4">
                 <div>
-                    <h3 className="font-bold text-gray-800">کاربران (Global) + خروجی اکسل</h3>
+                    <h3 className="font-bold text-gray-800">مدیریت کاربران</h3>
                     <p className="text-sm text-gray-500 mt-1">نمایش/خروجی فقط برای سوپرادمین فعال است.</p>
                 </div>
 
-                <div className="mt-4 grid grid-cols-1 lg:grid-cols-4 gap-3">
-                    <select
-                        className="border rounded-xl px-3 py-2 bg-white"
-                        value={globalRepresentativeId == null ? '' : String(globalRepresentativeId)}
-                        onChange={(e) => setGlobalRepresentativeId(e.target.value ? Number(e.target.value) : null)}
-                    >
-                        <option value="">همه نماینده‌ها</option>
-                        {candidates.map((c) => (
-                            <option key={c.id} value={String(c.id)}>
-                                {c.name}
-                            </option>
-                        ))}
-                    </select>
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="space-y-1">
+                        <label className="text-xs text-gray-500">نماینده</label>
+                        <select
+                            className="w-full border rounded-xl px-3 py-2 bg-white"
+                            value={globalRepresentativeId == null ? '' : String(globalRepresentativeId)}
+                            onChange={(e) => setGlobalRepresentativeId(e.target.value ? Number(e.target.value) : null)}
+                        >
+                            <option value="">همه نماینده‌ها</option>
+                            {candidates.map((c) => (
+                                <option key={c.id} value={String(c.id)}>
+                                    {c.name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
 
-                    <input
-                        className="border rounded-xl px-3 py-2 bg-white"
-                        type="date"
-                        value={globalStartDate}
-                        onChange={(e) => setGlobalStartDate(e.target.value)}
-                    />
-                    <input
-                        className="border rounded-xl px-3 py-2 bg-white"
-                        type="date"
-                        value={globalEndDate}
-                        onChange={(e) => setGlobalEndDate(e.target.value)}
-                    />
-                    <select
-                        className="border rounded-xl px-3 py-2 bg-white"
-                        value={globalInteractionType}
-                        onChange={(e) => setGlobalInteractionType(e.target.value as any)}
-                    >
-                        <option value="">همه تعامل‌ها</option>
-                        <option value="question">سوال</option>
-                        <option value="comment">نظر</option>
-                        <option value="lead">سرنخ</option>
-                    </select>
+                    <div className="space-y-1">
+                        <label className="text-xs text-gray-500">از تاریخ</label>
+                        <input
+                            className="w-full border rounded-xl px-3 py-2 bg-white"
+                            type="text"
+                            inputMode="numeric"
+                            dir="ltr"
+                            placeholder="1404/12/10"
+                            value={globalStartDate}
+                            onChange={(e) => setGlobalStartDate(e.target.value)}
+                        />
+                        <div className="text-[11px] text-gray-400">فرمت: 1404/12/10</div>
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-xs text-gray-500">تا تاریخ</label>
+                        <input
+                            className="w-full border rounded-xl px-3 py-2 bg-white"
+                            type="text"
+                            inputMode="numeric"
+                            dir="ltr"
+                            placeholder="1404/12/10"
+                            value={globalEndDate}
+                            onChange={(e) => setGlobalEndDate(e.target.value)}
+                        />
+                        <div className="text-[11px] text-gray-400">فرمت: 1404/12/10</div>
+                    </div>
+
+                    <div className="space-y-1">
+                        <label className="text-xs text-gray-500">تعامل</label>
+                        <div className="space-y-2">
+                            <label className="flex items-center gap-2 text-sm text-gray-700">
+                                <input
+                                    type="checkbox"
+                                    checked={globalInteractionType === 'question'}
+                                    onChange={(e) => setGlobalInteractionType(e.target.checked ? 'question' : '')}
+                                />
+                                سوال
+                            </label>
+                            <label className="flex items-center gap-2 text-sm text-gray-700">
+                                <input
+                                    type="checkbox"
+                                    checked={globalInteractionType === 'comment'}
+                                    onChange={(e) => setGlobalInteractionType(e.target.checked ? 'comment' : '')}
+                                />
+                                نظر
+                            </label>
+                            <label className="flex items-center gap-2 text-sm text-gray-700">
+                                <input
+                                    type="checkbox"
+                                    checked={globalInteractionType === 'lead'}
+                                    onChange={(e) => setGlobalInteractionType(e.target.checked ? 'lead' : '')}
+                                />
+                                سرنخ
+                            </label>
+                            <div className="text-[11px] text-gray-400">برای حذف فیلتر تعامل، تیک را بردارید.</div>
+                        </div>
+                    </div>
                 </div>
 
-                <div className="mt-3 flex flex-col sm:flex-row gap-2">
-                    <button
-                        className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm"
-                        onClick={loadGlobalUsers}
-                    >
-                        نمایش
-                    </button>
-                    <button
-                        className={`px-3 py-2 rounded-xl text-sm ${isExporting ? 'bg-gray-200 text-gray-500' : 'bg-gray-900 hover:bg-black text-white'}`}
-                        disabled={isExporting}
-                        onClick={exportGlobalUsers}
-                    >
-                        {isExporting ? 'در حال خروجی...' : 'خروجی اکسل'}
-                    </button>
+                <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div className="text-sm text-gray-600">
+                        {globalUsers.status === 'ready' ? `صفحه ${globalPage} از ${globalTotalPages}` : ''}
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                        <button
+                            type="button"
+                            className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm"
+                            onClick={clearGlobalFilters}
+                        >
+                            پاک کردن همه فیلترها
+                        </button>
+                        <button
+                            className="w-full sm:w-auto px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm"
+                            onClick={loadGlobalUsers}
+                        >
+                            نمایش
+                        </button>
+                        <button
+                            className={`w-full sm:w-auto px-4 py-2 rounded-xl text-sm ${isExporting ? 'bg-gray-200 text-gray-500' : 'bg-gray-900 hover:bg-black text-white'}`}
+                            disabled={isExporting}
+                            onClick={exportGlobalUsers}
+                        >
+                            {isExporting ? 'در حال خروجی...' : 'خروجی اکسل'}
+                        </button>
+                    </div>
                 </div>
 
                 {globalUsers.status === 'loading' && <div className="mt-3 text-sm text-gray-500">در حال بارگذاری...</div>}
-                {globalUsers.error && <div className="mt-3 text-sm text-red-600">{globalUsers.error}</div>}
+                {globalUsers.error && (
+                    <div className="mt-3 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl p-3">
+                        {globalUsers.error}
+                    </div>
+                )}
 
                 <div className="mt-4 overflow-x-auto">
                     <table className="min-w-full text-sm">
                         <thead>
                             <tr className="text-right text-gray-500">
-                                <th className="py-2 px-3">کاربر</th>
-                                <th className="py-2 px-3">نام</th>
-                                <th className="py-2 px-3">تلفن</th>
+                                <th className="py-2 px-3">ردیف</th>
+                                <th className="py-2 px-3">نام کاربری (آیدی سرچ تلگرام)</th>
+                                <th className="py-2 px-3">Telegram ID</th>
+                                <th className="py-2 px-3">نام و نام خانوادگی</th>
                                 <th className="py-2 px-3">نماینده</th>
-                                <th className="py-2 px-3">اولین تعامل</th>
-                                <th className="py-2 px-3">آخرین تعامل</th>
-                                <th className="py-2 px-3">تعداد</th>
-                                <th className="py-2 px-3">Flags</th>
+                                <th className="py-2 px-3">اولین تعامل (شمسی)</th>
+                                <th className="py-2 px-3">آخرین تعامل (شمسی)</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {(globalUsers.data || []).map((u, idx) => (
+                            {globalUsersPageRows.map((u, idx) => (
                                 <tr key={`${u.user_id}-${idx}`} className="border-t">
-                                    <td className="py-2 px-3" dir="ltr">{u.user_id}</td>
-                                    <td className="py-2 px-3">{[u.first_name, u.last_name].filter(Boolean).join(' ') || u.username || '-'}</td>
-                                    <td className="py-2 px-3" dir="ltr">{u.phone || '-'}</td>
-                                    <td className="py-2 px-3">{u.representative_id}</td>
-                                    <td className="py-2 px-3" dir="ltr">{formatDateTime(u.first_interaction_at)}</td>
-                                    <td className="py-2 px-3" dir="ltr">{formatDateTime(u.last_interaction_at)}</td>
-                                    <td className="py-2 px-3">{u.total_interactions}</td>
-                                    <td className="py-2 px-3 text-xs">
-                                        {u.asked_question ? 'Q ' : ''}
-                                        {u.left_comment ? 'C ' : ''}
-                                        {u.viewed_commitment ? 'K ' : ''}
-                                        {u.became_lead ? 'L ' : ''}
+                                    <td className="py-2 px-3 text-gray-500">{(globalPage - 1) * globalPageSize + idx + 1}</td>
+                                    <td className="py-2 px-3" dir="ltr">
+                                        {u.username ? (
+                                            <a
+                                                className="text-blue-700 hover:text-blue-900 hover:underline"
+                                                href={toTelegramUsernameUrl(u.username)}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                title="باز کردن پروفایل در تلگرام"
+                                            >
+                                                {toTelegramUsername(u.username)}
+                                            </a>
+                                        ) : (
+                                            <span className="text-gray-400">-</span>
+                                        )}
                                     </td>
+                                    <td className="py-2 px-3" dir="ltr">
+                                        <a
+                                            className="text-blue-700 hover:text-blue-900 hover:underline"
+                                            href={`tg://user?id=${encodeURIComponent(String(u.user_id))}`}
+                                            title="ارسال پیام در تلگرام"
+                                        >
+                                            {String(u.user_id)}
+                                        </a>
+                                    </td>
+                                    <td className="py-2 px-3">{[u.first_name, u.last_name].filter(Boolean).join(' ') || '-'}</td>
+                                    <td className="py-2 px-3">{candidateNameById.get(Number(u.representative_id)) || String(u.representative_id)}</td>
+                                    <td className="py-2 px-3" dir="ltr">{formatJalaliDateTime(u.first_interaction_at)}</td>
+                                    <td className="py-2 px-3" dir="ltr">{formatJalaliDateTime(u.last_interaction_at)}</td>
                                 </tr>
                             ))}
                             {!globalUsers.data?.length && globalUsers.status === 'ready' && (
-                                <tr className="border-t"><td className="py-2 px-3 text-gray-500" colSpan={8}>موردی یافت نشد</td></tr>
+                                <tr className="border-t"><td className="py-2 px-3 text-gray-500" colSpan={7}>موردی یافت نشد</td></tr>
                             )}
                         </tbody>
                     </table>
                 </div>
+
+                {globalUsers.status === 'ready' && (globalUsers.data?.length || 0) > 0 && (
+                    <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <div className="text-sm text-gray-500">نمایش {Math.min(globalUsersTotal, globalPage * globalPageSize)} از {globalUsersTotal}</div>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                className={`px-3 py-2 rounded-xl text-sm border ${globalPage <= 1 ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-200'}`}
+                                disabled={globalPage <= 1}
+                                onClick={() => setGlobalPage((p) => Math.max(1, p - 1))}
+                            >
+                                صفحه قبل
+                            </button>
+                            <div className="text-sm text-gray-600">{globalPage} / {globalTotalPages}</div>
+                            <button
+                                type="button"
+                                className={`px-3 py-2 rounded-xl text-sm border ${globalPage >= globalTotalPages ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-200'}`}
+                                disabled={globalPage >= globalTotalPages}
+                                onClick={() => setGlobalPage((p) => Math.min(globalTotalPages, p + 1))}
+                            >
+                                صفحه بعد
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
